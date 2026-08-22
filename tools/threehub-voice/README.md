@@ -66,7 +66,7 @@ after that use the already-running servers. Raw validation measurements are in
 
 `run-minimindo-native-a113x.sh` is the persistent launcher for the separate
 native MiniMind-O service. It pins the executable to GitHub release
-`minimindo-native-a113x-v1.4.0` and the unchanged packed model images to
+`minimindo-native-a113x-v1.5.0` and the unchanged packed model images to
 `minimindo-native-a113x-v1.0.0`. Missing or corrupt files are downloaded to a
 per-process `.part` file, verified by SHA-256, chmodded, and atomically renamed
 before execution. The default live policy is first-sentence completion with a
@@ -79,6 +79,15 @@ Talker generation. Speaker delivery starts on the first decoded 80 ms PCM
 frame. It never waits for producer EOS, a frame watermark, or the complete
 response; continuity work must improve sustained model/codec throughput rather
 than hide latency in a start buffer.
+
+The same native process exposes the live pipeline on the ThreeHub front RGB
+LED through the board's resident `supervisor`: listening is a very slow green
+blink, inference is a slow yellow blink, and playback is a slow pure/deep-blue
+blink. An isolated LED worker performs the supervisor calls. Capture,
+generation, Mimi decode, and ALSA playback only publish the latest state to a
+nonblocking atomic mailbox, so LED control cannot block or lock the streaming
+path. Playback changes to blue only after the first 80 ms PCM frame has been
+successfully written to ALSA.
 
 To populate and verify a volatile install without starting the service:
 

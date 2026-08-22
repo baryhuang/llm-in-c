@@ -444,7 +444,7 @@ require about 377 MiB. `/dev/shm` is erased on reboot. The persistent
 `/usr/local/bin/run-minimindo-native-a113x.sh` launcher solves that cold-boot
 failure by verifying every artifact against a pinned SHA256 and downloading
 only missing or corrupt files. The executable comes from
-[`minimindo-native-a113x-v1.4.0`](https://github.com/baryhuang/llm-in-c/releases/tag/minimindo-native-a113x-v1.4.0);
+[`minimindo-native-a113x-v1.5.0`](https://github.com/baryhuang/llm-in-c/releases/tag/minimindo-native-a113x-v1.5.0);
 the unchanged packed model images remain pinned to the v1.0.0 release.
 
 Downloads use a per-process `.part` file in `/dev/shm`; the launcher verifies

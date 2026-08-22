@@ -42,6 +42,13 @@ The implementation makes the following production choices:
   enqueue notification.
 - Talker frames are decoded as they are produced. ALSA starts on decoded frame
   one. Capture continues to drain while inference and playback run.
+- The ThreeHub RGB status LED is out-of-band telemetry, not part of the model
+  graph. Critical threads only publish the latest state through a nonblocking
+  atomic mailbox; a dedicated native-C worker invokes the board's resident
+  supervisor. Listening is very-slow green, inference slow yellow, and
+  playback slow pure blue. Blue begins only after ALSA accepts the first PCM
+  frame, so the light describes externally observable playback rather than
+  merely available model tokens.
 - After text EOS, Thinker advances one bridge at a time. The rejected 16-step
   bridge batch improved aggregate throughput but created a visible 0.7--0.9 s
   hole in Talker code arrival and therefore was not streaming.

@@ -8,9 +8,12 @@
 #include "minimindo_thinker.h"
 #include "minimindo_tokenizer.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <float.h>
 #include <math.h>
 #include <pthread.h>
+#include <spawn.h>
 #if defined(__linux__)
 #include <sched.h>
 #include <sys/syscall.h>
@@ -21,7 +24,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <time.h>
+#include <unistd.h>
+
+extern char **environ;
 
 typedef struct { float score; uint32_t id; } candidate;
 
@@ -31,6 +38,172 @@ static minimindo_tokenizer *resident_tokenizer;
 static minimindo_mimi *resident_mimi;
 static minimindo_audio_encoder *resident_audio_encoder;
 static const uint32_t resident_context = 512;
+
+typedef enum {
+    HUB_LED_NONE = 0,
+    HUB_LED_LISTENING,
+    HUB_LED_THINKING,
+    HUB_LED_PLAYBACK,
+    HUB_LED_ERROR,
+    HUB_LED_STOP_CLEAR,
+    HUB_LED_STOP_ERROR
+} hub_led_state;
+
+typedef struct {
+    pthread_t thread;
+    int wake_read;
+    int wake_write;
+    atomic_int desired;
+    int started;
+} hub_led_worker;
+
+static hub_led_worker resident_led;
+
+static const char *hub_led_name(hub_led_state state)
+{
+    switch (state) {
+    case HUB_LED_LISTENING: return "listening-green-very-slow";
+    case HUB_LED_THINKING: return "thinking-yellow-slow";
+    case HUB_LED_PLAYBACK: return "playback-deep-blue-slow";
+    case HUB_LED_ERROR:
+    case HUB_LED_STOP_ERROR: return "error-red-slow";
+    case HUB_LED_STOP_CLEAR: return "supervisor-default";
+    default: return NULL;
+    }
+}
+
+static int hub_led_execute_command(const char *command)
+{
+    char *const arguments[] = {
+        (char *)"/usr/local/bin/supervisor", (char *)"led",
+        (char *)command, NULL
+    };
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions) != 0) return -1;
+    (void)posix_spawn_file_actions_addopen(
+        &actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    (void)posix_spawn_file_actions_addopen(
+        &actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    pid_t child = -1;
+    const int spawn_result = posix_spawn(
+        &child, arguments[0], &actions, NULL, arguments, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    if (spawn_result != 0) return -1;
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) return -1;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+
+static int hub_led_execute(hub_led_state state)
+{
+    int result = 0;
+    /* The resident ThirdReality supervisor owns the RGB GPIO lines and owns
+     * the blink timer.  These named states produce hardware-timed patterns:
+     * firmware_updating = green 1 s on/1 s off,
+     * offline = yellow 1 s on/1 s off, and
+     * wifi_config_pending = pure blue 0.5 s on/0.5 s off.
+     * Clear only the higher tiers that could mask the requested pattern. */
+    switch (state) {
+    case HUB_LED_LISTENING:
+        return hub_led_execute_command("firmware_updating");
+    case HUB_LED_THINKING:
+        if (hub_led_execute_command("sys_event_off") != 0) result = -1;
+        if (hub_led_execute_command("wifi_config_stopped") != 0) result = -1;
+        if (hub_led_execute_command("offline") != 0) result = -1;
+        return result;
+    case HUB_LED_PLAYBACK:
+        if (hub_led_execute_command("sys_event_off") != 0) result = -1;
+        if (hub_led_execute_command("wifi_config_pending") != 0) result = -1;
+        return result;
+    case HUB_LED_ERROR:
+    case HUB_LED_STOP_ERROR:
+        if (hub_led_execute_command("sys_event_off") != 0) result = -1;
+        if (hub_led_execute_command("wifi_config_stopped") != 0) result = -1;
+        if (hub_led_execute_command("error") != 0) result = -1;
+        return result;
+    case HUB_LED_STOP_CLEAR:
+        if (hub_led_execute_command("sys_event_off") != 0) result = -1;
+        if (hub_led_execute_command("wifi_config_stopped") != 0) result = -1;
+        if (hub_led_execute_command("clear") != 0) result = -1;
+        return result;
+    default:
+        return -1;
+    }
+}
+
+static void *hub_led_thread(void *opaque)
+{
+    hub_led_worker *worker = opaque;
+    for (;;) {
+        unsigned char wake[32];
+        const ssize_t count = read(worker->wake_read, wake, sizeof(wake));
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (count == 0) break;
+        const hub_led_state state = (hub_led_state)atomic_exchange_explicit(
+            &worker->desired, HUB_LED_NONE, memory_order_acq_rel);
+        if (state == HUB_LED_NONE) continue;
+        const int result = hub_led_execute(state);
+        printf("LED state=%s result=%d\n", hub_led_name(state), result);
+        fflush(stdout);
+        if (state == HUB_LED_STOP_CLEAR || state == HUB_LED_STOP_ERROR) break;
+    }
+    return NULL;
+}
+
+static int hub_led_start(void)
+{
+    hub_led_worker *worker = &resident_led;
+    memset(worker, 0, sizeof(*worker));
+    worker->wake_read = -1;
+    worker->wake_write = -1;
+    atomic_init(&worker->desired, HUB_LED_NONE);
+    int wake[2];
+    if (pipe(wake) != 0) return -1;
+    worker->wake_read = wake[0];
+    worker->wake_write = wake[1];
+    const int flags = fcntl(worker->wake_write, F_GETFL, 0);
+    if (flags < 0 ||
+        fcntl(worker->wake_write, F_SETFL, flags | O_NONBLOCK) != 0 ||
+        fcntl(worker->wake_read, F_SETFD, FD_CLOEXEC) != 0 ||
+        fcntl(worker->wake_write, F_SETFD, FD_CLOEXEC) != 0 ||
+        pthread_create(&worker->thread, NULL, hub_led_thread, worker) != 0) {
+        close(worker->wake_read);
+        close(worker->wake_write);
+        worker->wake_read = -1;
+        worker->wake_write = -1;
+        return -1;
+    }
+    worker->started = 1;
+    return 0;
+}
+
+static void hub_led_publish(hub_led_state state)
+{
+    hub_led_worker *worker = &resident_led;
+    if (!worker->started) return;
+    atomic_store_explicit(&worker->desired, state, memory_order_release);
+    const unsigned char wake = 1U;
+    const ssize_t ignored = write(worker->wake_write, &wake, sizeof(wake));
+    (void)ignored;
+}
+
+static void hub_led_stop(hub_led_state final_state)
+{
+    hub_led_worker *worker = &resident_led;
+    if (!worker->started) return;
+    hub_led_publish(final_state);
+    pthread_join(worker->thread, NULL);
+    close(worker->wake_read);
+    close(worker->wake_write);
+    worker->wake_read = -1;
+    worker->wake_write = -1;
+    worker->started = 0;
+}
 
 static double monotonic_seconds(void);
 static double process_cpu_seconds(void);
@@ -604,6 +777,7 @@ static int stream_worker_to_alsa(mimi_decode_worker *worker,
             result = -1;
             break;
         }
+        if (frame == 0U) hub_led_publish(HUB_LED_PLAYBACK);
         const size_t decoded_snapshot = atomic_load_explicit(
             &worker->decoded_frames, memory_order_acquire);
         const size_t queued_snapshot = atomic_load_explicit(
@@ -1017,6 +1191,8 @@ static int run(const char *thinker_path, const char *talker_path,
                    (monotonic_seconds() - run_start) * 1000.0,
                    queue_waits, queue_wait_ms);
             fflush(stdout);
+            hub_led_publish(playback_result == 0 ? HUB_LED_LISTENING :
+                                                      HUB_LED_ERROR);
         }
         if (mimi_decode_worker_finish(&decoder) != 0) {
             fprintf(stderr, "Mimi stream decode: %s\n", decoder.error);
@@ -1554,18 +1730,22 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
                 const char *playback_device,uint32_t max_tokens,uint64_t seed)
 {
     if(!safe_alsa_name(capture_device)||!safe_alsa_name(playback_device))return -1;
+    if(hub_led_start()!=0)
+        fprintf(stderr,"status LED worker unavailable; voice path continues\n");
+    hub_led_publish(HUB_LED_THINKING);
     const double warm_start=monotonic_seconds();
     (void)minimindo_parallel_pin_current(0U);
     (void)minimindo_parallel_session_begin(4U);
     const int warm_result=warm_resident(thinker,talker,tokenizer,mimi,audio_encoder);
     minimindo_parallel_session_end();
-    if(warm_result)return -1;
+    if(warm_result){hub_led_stop(HUB_LED_STOP_ERROR);return -1;}
     printf("READY pipeline=MiniMind-O-native-C input_streaming=always "
            "input_center_ms=480 input_right_context_ms=240 "
            "input_kv_cache_ms=1920 warmup_ms=%.0f capture=%s playback=%s\n",
            (monotonic_seconds()-warm_start)*1000,capture_device,
            playback_device);fflush(stdout);
-    capture_queue capture;if(capture_start(&capture,capture_device)){perror("arecord");return -1;}
+    hub_led_publish(HUB_LED_LISTENING);
+    capture_queue capture;if(capture_start(&capture,capture_device)){perror("arecord");hub_led_stop(HUB_LED_STOP_ERROR);return -1;}
     enum{CHUNK=CAPTURE_CHUNK,PREROLL=8192,MAX_SPEECH=3*16000};
     int16_t chunk[CHUNK],ring[PREROLL],pending_silence[20][CHUNK];
     int16_t *speech=malloc(MAX_SPEECH*sizeof(int16_t));
@@ -1574,7 +1754,7 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
     double noise=120.0,last_monitor=0;
     int speaking=0,hot=0,silent=0,active_chunks=0,cooldown=0;
     unsigned turn=0;
-    if(!speech)return -1;
+    if(!speech){capture_stop(&capture);hub_led_stop(HUB_LED_STOP_ERROR);return -1;}
     while(1){if(capture_next(&capture,chunk))break;size_t got=CHUNK;
         double squares=0,peak=0;for(size_t i=0;i<got;++i){double v=chunk[i];squares+=v*v;if(fabs(v)>peak)peak=fabs(v);}double rms=sqrt(squares/got);
         double threshold=fmax(280.0,noise*3.2);double now=monotonic_seconds();
@@ -1587,6 +1767,7 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
                 for(size_t i=0;i<ring_count&&speech_count<MAX_SPEECH;++i)speech[speech_count++]=ring[(start+i)%PREROLL];
                 const double speech_start=monotonic_seconds();
                 printf("EVENT speech_start turn=%u preroll_ms=%zu\n",turn+1,ring_count*1000/16000);fflush(stdout);
+                hub_led_publish(HUB_LED_LISTENING);
                 if(live_input_start(&input,turn+1,speech_start,speech,speech_count)){
                     fprintf(stderr,"input streaming worker start failed\n");break;}}}
         else{const int hit_limit=speech_count+got>MAX_SPEECH;
@@ -1616,8 +1797,10 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
                     printf("EVENT empty_vad turn=%u samples=%zu active_chunks=%d action=discard\n",turn,speech_count,active_chunks);fflush(stdout);
                     (void)live_input_finish(&input,1);
                     free(input.prefilled.text_logits);input.prefilled.text_logits=NULL;
+                    hub_led_publish(HUB_LED_LISTENING);
                     speech_count=0;continue;}
                 printf("EVENT speech_end turn=%u samples=%zu duration_ms=%zu end=%s\n",turn,speech_count,speech_count*1000/16000,hit_limit?"limit":"silence");fflush(stdout);
+                hub_led_publish(HUB_LED_THINKING);
                 const double inference_start=monotonic_seconds();const char *response="/dev/shm/minimindo-live-response.wav";
                 if(live_input_finish(&input,0)){
                     fprintf(stderr,"input streaming turn=%u did not finish\n",turn);
@@ -1633,13 +1816,14 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
                                playback_device,turn,&input.prefilled);
                 minimindo_parallel_session_end();
                 free(input.prefilled.text_logits);input.prefilled.text_logits=NULL;
+                if(result)hub_led_publish(HUB_LED_ERROR);
                 printf("EVENT inference_end turn=%u elapsed_ms=%.0f result=%d\n",turn,(monotonic_seconds()-inference_start)*1000,result);fflush(stdout);speech_count=0;
                 capture_flush(&capture);cooldown=32;
             }}
     }
     if(input.started)(void)live_input_finish(&input,1);
     free(input.prefilled.text_logits);
-    free(speech);capture_stop(&capture);return -1;
+    free(speech);capture_stop(&capture);hub_led_stop(HUB_LED_STOP_ERROR);return -1;
 }
 
 int main(int argc,char **argv)
