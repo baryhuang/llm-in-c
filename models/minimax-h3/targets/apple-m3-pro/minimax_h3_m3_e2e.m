@@ -985,7 +985,7 @@ static int h3_q4_linear_lora(h3_remote_image *image,
     };
     const char *lora_mma_text = getenv("MINIMAX_H3_LORA_MMA");
     const int use_lora_mma =
-        (lora_mma_text == NULL || strcmp(lora_mma_text, "0") != 0) &&
+        lora_mma_text != NULL && strcmp(lora_mma_text, "1") == 0 &&
         down.tensor.shape[0] % 64u == 0u &&
         down.tensor.shape[1] % 8u == 0u &&
         up.tensor.shape[0] % 64u == 0u && up.tensor.shape[1] % 8u == 0u;
@@ -3311,7 +3311,7 @@ static int h3_transformer_run(const uint16_t *text_states,
          strcmp(pipeline_groups_text, "0") != 0);
     const char *lora_mma_text = getenv("MINIMAX_H3_LORA_MMA");
     const int lora_mma_enabled =
-        lora_mma_text == NULL || strcmp(lora_mma_text, "0") != 0;
+        lora_mma_text != NULL && strcmp(lora_mma_text, "1") == 0;
     fprintf(stderr,
             "stage=denoise-schedule layer_groups=%s lora=%s validation=%s\n",
             pipeline_layer_groups ? "pipelined" : "synchronous",

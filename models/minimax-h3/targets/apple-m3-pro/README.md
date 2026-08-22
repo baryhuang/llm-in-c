@@ -33,19 +33,22 @@ reviewed per-frame on the highest-motion shot.
 A fixed-seed `640x352x124` text-to-video run exposed the same two dominant
 boundaries as 480p: H3 denoise and Video VAE decode.  The initial native run
 took 999.590614 seconds: 768.833793 seconds in denoise and 199.300129 seconds
-in Video VAE.  The selected path takes 783.832033 seconds, a 215.758581-second
-or 21.58 percent reduction.  Denoise falls to 595.291946 seconds and Video VAE
-to 159.662679 seconds.
+in Video VAE.  A combined performance experiment took 783.832033 seconds,
+but it is rejected: user visual review found a large composition regression,
+including the subject's face and head being cropped from shots.  The release
+default therefore retains the previous SIMD-reduction LoRA path while keeping
+the bit-identical command-buffer pipeline and the quality-gated Video VAE tile.
 
-| Selected change | Component A/B | Full-run effect | Correctness boundary |
+| Change | Component A/B | Full-run effect | Decision and correctness boundary |
 |---|---:|---:|---|
-| BF16 simdgroup-matrix Turbo LoRA down/up | 128x128x124 denoise: 92.476261 → 52.163499 s (1.773x) | 360p denoise, combined with submission pipelining: 768.833793 → 595.291946 s | FP32 accumulation and BF16 output remain, but matrix reduction order changes; fixed-seed media is not bit identical |
+| BF16 simdgroup-matrix Turbo LoRA down/up | 128x128x124 denoise: 92.476261 → 52.163499 s (1.773x) | experimental 360p denoise, combined with submission pipelining: 768.833793 → 595.291946 s | **Rejected:** changed reduction order causes trajectory and composition regression; experimental opt-in only |
 | Thirteen precommitted four-layer command buffers | 128x128x124 denoise: 93.332582 → 92.350155 s | included in the 595.291946-second denoise result | serial queue and hidden-state dependencies are retained; control media hashes are identical |
 | Geometry-specific 256x160 Video VAE tiles at 352-pixel height | deterministic VAE: 198.378460 → 159.409562 s; peak 550.3 → 436.0 MiB | 199.300129 → 159.662679 s | required 64-pixel overlap retained; 124-frame deterministic-latent PSNR is 36.939526 dB and sampled seams pass visual review |
 
-The LoRA kernel is selected only when adapter dimensions are multiples of the
-64-output/8-input matrix tile.  `MINIMAX_H3_LORA_MMA=0` restores the scalar
-SIMD-reduction adapter path.  `MINIMAX_H3_PIPELINE_LAYER_GROUPS=0` restores
+The release default uses the scalar SIMD-reduction adapter path.  The rejected
+matrix experiment can be reproduced only with `MINIMAX_H3_LORA_MMA=1`, and
+only when adapter dimensions are multiples of its 64-output/8-input tile.
+`MINIMAX_H3_PIPELINE_LAYER_GROUPS=0` restores
 synchronous four-layer submission.  `MINIMAX_H3_VAE_TILE_HEIGHT` and
 `MINIMAX_H3_VAE_TILE_WIDTH` override the geometry default.  Release validation
 checks the hidden state once per denoise step; setting
@@ -72,10 +75,11 @@ before both VAEs and mux.
   work and make each quadratic attention task smaller.  Tile count alone is
   therefore a misleading cost metric; overlap area and per-tile attention
   rows must be evaluated together.
-* BF16 MMA changes FP32 summation order.  The optimized 360p run is visually
-  coherent and has no sampled tile seam, but its same-seed encoded-video PSNR
-  versus the prior reduction order is 16.056232 dB and composition diverges.
-  This is a quality-gated optimization, not an exact-reproducibility claim.
+* BF16 MMA changes FP32 summation order.  Its same-seed encoded-video PSNR
+  versus the prior reduction order is only 16.056232 dB.  User review found a
+  large visual regression: composition drifted and the subject's head and face
+  were cropped from shots.  The experiment failed the quality gate and is not
+  the release default.
 * Full resolution changes the bottleneck mix.  LoRA MMA improves the isolated
   128p denoise by 43.59 percent but complete 360p denoise by 22.57 percent,
   because exact dense attention consumes a larger share at 8,642 rows.

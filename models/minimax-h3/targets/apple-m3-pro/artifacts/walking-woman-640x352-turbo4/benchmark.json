@@ -39,7 +39,7 @@
     "denoise_schedule": "synchronous four-layer groups; SIMD-reduction LoRA",
     "video_vae_tiles": "256x256; 3x2 spatial grid; 7 temporal chunks"
   },
-  "optimized": {
+  "experimental_mma": {
     "durations_seconds": {
       "tokenizer": 0.009325,
       "metal_setup": 0.046693,
@@ -58,7 +58,7 @@
     "denoise_schedule": "pipelined four-layer command buffers; BF16 simdgroup-matrix LoRA",
     "video_vae_tiles": "256x160; 3x3 spatial grid; 7 temporal chunks"
   },
-  "improvement": {
+  "experimental_mma_improvement": {
     "total_seconds_saved": 215.758581,
     "total_percent": 21.5847,
     "total_speedup": 1.27526,
@@ -69,7 +69,16 @@
     "lora_mma_128x128x124": {
       "simd_reduction_seconds": 92.476261,
       "bf16_mma_seconds": 52.163499,
-      "speedup": 1.77281
+      "speedup": 1.77281,
+      "decision": "rejected-user-visual-regression"
+    },
+    "layer_group_pipeline_128x128x124": {
+      "synchronous_seconds": 93.332582,
+      "pipelined_seconds": 92.350155,
+      "video_sha256": "15231322b527c9c8b83863bb4e445e762783bdd9d1bc2e6e02b6459243e87dd2",
+      "audio_sha256": "444149073e0c8e082d4c637e4410b0e7d1ee4d81edd15e7d0d2ffa113b489fe5",
+      "media_hashes_match": true,
+      "decision": "release-default"
     },
     "video_vae_640x352x124": {
       "tile_256x256_seconds": 198.378460,
@@ -99,11 +108,17 @@
       "finding": "no gain; barriers cancel cached-weight reuse"
     }
   ],
+  "release_default": {
+    "lora": "SIMD reduction; BF16 MMA disabled unless MINIMAX_H3_LORA_MMA=1",
+    "denoise_schedule": "pipelined four-layer command buffers",
+    "video_vae_tiles": "256x160 at 352-pixel height",
+    "full_360p_runtime": "not remeasured after restoring SIMD-reduction LoRA"
+  },
   "quality": {
-    "status": "visual-pass-with-trajectory-divergence",
+    "status": "rejected-user-visual-regression",
     "sampled_frames": [0, 62, 123],
     "sampled_spatial_seams": "none observed",
-    "optimized_vs_baseline_encoded_video_psnr_db": 16.056232,
-    "note": "BF16 matrix accumulation changes reduction order, so same-seed composition is not bit-exact. Both outputs are coherent."
+    "experimental_mma_vs_baseline_encoded_video_psnr_db": 16.056232,
+    "note": "BF16 matrix accumulation changes reduction order. User review found major composition regression, including the subject's face and head being cropped from shots; the MMA path is not the release default."
   }
 }

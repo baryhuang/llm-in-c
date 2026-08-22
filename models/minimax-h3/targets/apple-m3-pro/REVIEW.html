@@ -30,19 +30,19 @@
     <div class="card"><div class="pass">FUNCTIONAL N-TO-N: PASS</div>Original prompt reached tokenizer, 50-layer conditioner, H3, both VAEs and final MP4.</div>
     <div class="card"><div class="pass">MEDIA STRUCTURE: PASS</div>124/124 H.264 frames decode; 32 kHz stereo AAC is non-silent.</div>
     <div class="card"><div class="pass">EXACT VISUAL GATE: PASS</div>Four distinct prompt-aligned shots are visible with no flat tail.</div>
-    <div class="card"><div class="pass">360P OPTIMIZATION: 1.275×</div>Same prompt, seed and 640×352×124 workload: 999.591 → 783.832 seconds.</div>
+    <div class="card"><div class="fail">360P MMA QUALITY GATE: REJECTED</div>The 783.832-second experiment is faster, but user review found major composition and subject-cropping regressions.</div>
     <div class="card"><div class="fail">TREE VISUAL GATE: REGRESSION</div>1,489.401 s experimental path preserves shot categories but adds softness, ghosting and excess scene changes.</div>
   </div>
 
   <h2>2026-08-22 · 640×352 Turbo-4 optimization</h2>
-  <p>The latest round used the same 88-token prompt, seed <code>604315832732455</code>, 124 frames and four Turbo evaluations for both runs. It changes no model weights. The selected runtime adds BF16 simdgroup-matrix kernels for Turbo LoRA, precommits the fixed thirteen four-layer command buffers, and selects a 256×160 Video VAE tile at 352-pixel height.</p>
+  <p>The latest round used the same 88-token prompt, seed <code>604315832732455</code>, 124 frames and four Turbo evaluations for both runs. It changes no model weights. The 783.832-second BF16-MMA experiment failed user visual review and is not the release path. The quality-safe default restores SIMD-reduction Turbo LoRA while retaining the bit-identical fixed command-buffer pipeline and the 256×160 Video VAE tile.</p>
   <table>
-    <thead><tr><th>Stage</th><th class="num">Baseline</th><th class="num">Optimized</th><th class="num">Change</th><th>Finding</th></tr></thead>
+    <thead><tr><th>Stage</th><th class="num">Baseline</th><th class="num">MMA experiment</th><th class="num">Change</th><th>Finding</th></tr></thead>
     <tbody>
       <tr><td>H3 denoise</td><td class="num">768.833793 s</td><td class="num"><strong>595.291946 s</strong></td><td class="num"><strong>−22.57%</strong></td><td>BF16 matrix LoRA plus fixed command-buffer pipeline; exact dense attention remains dominant at 8,642 rows.</td></tr>
       <tr><td>Video VAE decode</td><td class="num">199.300129 s</td><td class="num"><strong>159.662679 s</strong></td><td class="num"><strong>−19.89%</strong></td><td>Three 160-pixel vertical tiles retain 64-pixel overlap and remove the 160-pixel overlap forced by two 256-pixel tiles.</td></tr>
       <tr><td>Audio VAE decode</td><td class="num">13.979280 s</td><td class="num">13.642022 s</td><td class="num">−2.41%</td><td>Unchanged path; difference is run variation.</td></tr>
-      <tr><td><strong>Complete native runtime</strong></td><td class="num"><strong>999.590614 s</strong></td><td class="num"><strong>783.832033 s</strong></td><td class="num"><strong>−215.758581 s; 1.275×</strong></td><td class="pass">Complete MP4, 124 frames and non-silent audio generated.</td></tr>
+      <tr><td><strong>Complete native runtime</strong></td><td class="num"><strong>999.590614 s</strong></td><td class="num"><strong>783.832033 s</strong></td><td class="num"><strong>−215.758581 s; 1.275×</strong></td><td class="fail">Experimental timing only; complete media generated, but visual quality failed.</td></tr>
       <tr><td>Peak physical footprint</td><td class="num">2,316,179,392 B</td><td class="num">2,818,906,816 B</td><td class="num">+502,727,424 B</td><td>Thirteen queued command buffers trade memory for lower submission gaps; still within the 36 GB target.</td></tr>
     </tbody>
   </table>
@@ -51,7 +51,7 @@
   <table>
     <thead><tr><th>Experiment</th><th class="num">Control</th><th class="num">Candidate</th><th>Decision</th></tr></thead>
     <tbody>
-      <tr><td>Turbo LoRA BF16 matrix path, 128×128×124 denoise</td><td class="num">92.476261 s</td><td class="num"><strong>52.163499 s</strong></td><td class="pass">SELECTED · 1.773×; FP32 accumulation retained, but reduction order changes.</td></tr>
+      <tr><td>Turbo LoRA BF16 matrix path, 128×128×124 denoise</td><td class="num">92.476261 s</td><td class="num"><strong>52.163499 s</strong></td><td class="fail">REJECTED · 1.773×, but user visual review found major composition and subject-cropping regressions.</td></tr>
       <tr><td>360p deterministic-latent Video VAE tile</td><td class="num">256×256: 198.378460 s; 550.3 MiB</td><td class="num"><strong>256×160: 159.409562 s; 436.0 MiB</strong></td><td class="pass">SELECTED · 1.244×; 36.939526 dB cross-tile PSNR; sampled seams pass.</td></tr>
       <tr><td>Four-layer command submission</td><td class="num">93.332582 s</td><td class="num">92.350155 s</td><td class="pass">SELECTED · small 1.05% win; control media hashes identical.</td></tr>
       <tr><td>Q4 batch-64 activation tile</td><td class="num">93.332582 s</td><td class="num">94.436593 s</td><td class="fail">REJECTED · 1.18% slower despite identical media.</td></tr>
@@ -59,7 +59,7 @@
       <tr><td>Step-only finite scans as a speed change</td><td class="num">93.332582 s</td><td class="num">93.851104 s</td><td>Not a speed claim; retained as the release validation boundary.</td></tr>
     </tbody>
   </table>
-  <p class="open"><strong>Numerical boundary:</strong> simdgroup MMA changes the FP32 reduction order. The same-seed optimized video is coherent and has no sampled VAE seam, but composition diverges from the scalar-SIMD LoRA trajectory; encoded-video PSNR is 16.056232 dB. Set <code>MINIMAX_H3_LORA_MMA=0</code> when the previous reduction order is required.</p>
+  <p class="fail"><strong>Numerical boundary:</strong> simdgroup MMA changes the FP32 reduction order. The same-seed video diverges from the scalar-SIMD LoRA trajectory (encoded-video PSNR 16.056232 dB), and user review found substantially worse framing, including loss of the subject's face and head. The release default is SIMD reduction; <code>MINIMAX_H3_LORA_MMA=1</code> is an explicit rejected-experiment switch.</p>
   <p>Machine-readable parameters and measurements: <a href="artifacts/walking-woman-640x352-turbo4/benchmark.json">360p benchmark JSON</a> · exact <a href="artifacts/walking-woman-640x352-turbo4/prompt.txt">prompt</a>.</p>
 
   <h2>N-to-N optimization timeline</h2>

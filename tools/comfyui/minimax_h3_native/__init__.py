@@ -159,6 +159,7 @@ class MiniMaxH3NativeFL2VA:
         environment = os.environ.copy()
         environment["MINIMAX_H3_TEXT_ENCODER_URL"] = f"file://{text_encoder}"
         environment["MINIMAX_H3_TREE_ATTENTION"] = "0"
+        environment["MINIMAX_H3_LORA_MMA"] = "0"
         if turbo_4_step:
             environment["MINIMAX_H3_TURBO_ADAPTER"] = f"file://{turbo_adapter}"
         else:
