@@ -26,9 +26,11 @@ int minimindo_mimi_decode(minimindo_mimi *model,
                           char *error, size_t error_capacity);
 
 /*
- * Stateful causal decoder. Codes are codebook-major [8][frames] for only the
- * new frames. The stream retains the Mimi transformer KV cache, the semantic
- * upsampler tail, and every causal convolution/deconvolution boundary.
+ * Stateful causal decoder. Each call pushes exactly one new codec frame, so
+ * codes is codebook-major [8][1]. The stream retains the Mimi transformer KV
+ * cache, the semantic upsampler tail, and every causal convolution/deconvolution
+ * boundary. One-frame pushes are intentional: this is the production SPSC
+ * boundary between the Talker and Mimi, not a selectable batch mode.
  */
 minimindo_mimi_stream *minimindo_mimi_stream_open(
     minimindo_mimi *model, char *error, size_t error_capacity);

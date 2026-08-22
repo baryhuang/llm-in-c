@@ -1,0 +1,59 @@
+MiniMind-O native C real-streaming optimization record
+Date: 2026-08-22
+Target: ThirdReality TRHub-V3, Amlogic A113D/A113X, 4x Cortex-A53
+
+Production invariant
+--------------------
+Input PCM advances the online encoder and Thinker/Talker while capture is
+active.  Each complete Talker frame enters Mimi immediately.  The first
+decoded 1,920-sample/80 ms PCM frame enters ALSA immediately.  There is no
+producer-EOS, watermark, or complete-response playback gate.
+
+Deployed executable
+-------------------
+sha256 c86007a11c65c184a30665a6cd403302f12920bf0e46f2e8a9ae47aee5a5e64f
+flags  -Ofast -std=c11 -DMINIMINDO_GENERATION_W8A8=1
+target -march=armv8-a+simd -mtune=cortex-a53 -pthread
+deps   libc.so.6, libm.so.6; no libgomp, OpenMP, or Python
+READY  2026-08-22 14:22:11 PDT, warmup_ms=684, service PID=137690
+
+Exact Mimi kernel A/B, 8 frames / 0.64 s PCM
+------------------------------------------------
+Prior full-window kernel: 0.72 0.72 0.75 0.73 0.72 0.73 0.75 s
+Paired-int8 dot:         0.76 0.68 0.65 0.67 0.70 0.66 0.66 s
+Plus deconv dot4:        0.65 0.66 0.67 0.64 0.69 0.66 0.62 s
+All WAV SHA256: 94b17f8a63fc6c7d3a70bc2266649fd87d0b98641ae2bb0261dd2451da01208f
+
+Concurrent fixed-prompt trace, prompt="hello", seed=1
+----------------------------------------------------
+THREAD stage=mimi_start cpu=3 affinity=3 threads=3
+STREAM stage=talker_produce frame=1 elapsed_ms=1543
+STREAM stage=mimi_decode frame=1 queued=1 producer_done=0 frame_ms=110.7 rtf=1.383 elapsed_ms=1653
+STREAM stage=talker_produce frame=2 elapsed_ms=1657
+STREAM stage=talker_produce frame=3 elapsed_ms=1769
+STREAM stage=mimi_decode frame=2 queued=3 producer_done=0 frame_ms=116.1 rtf=1.451 elapsed_ms=1774
+STREAM stage=thinker_drain_prefill positions=1 elapsed_ms=1811
+STREAM stage=mimi_decode frame=8 queued=8 producer_done=0 frame_ms=99.2 rtf=1.239 elapsed_ms=2413
+STREAM stage=talker_produce frame=14 elapsed_ms=2971
+STREAM stage=mimi_decode frame=14 queued=14 producer_done=0 frame_ms=112.8 rtf=1.410 elapsed_ms=3090
+STREAM stage=talker_produce frame=21 elapsed_ms=3729
+STREAM stage=mimi_decode frame=21 queued=22 producer_done=0 frame_ms=116.3 rtf=1.454 elapsed_ms=3891
+STREAM stage=talker_produce frame=28 elapsed_ms=4484
+STREAM stage=talker_done frames=28 decoded=27 elapsed_ms=4592
+STREAM stage=mimi_decode frame=28 queued=28 producer_done=1 frame_ms=87.9 rtf=1.099 elapsed_ms=4655
+{"text":"Hello! How can I assist you today?<|im_end|>","steps":37,"text_steps":10,"audio_frames":28,"samples":53760,"prefill_ms":912,"generate_ms":3546,"producer_end_ms":4592,"model_ms":4655,"decode_overlap_frames":27,"audio_drain_complete":true}
+
+Interpretation
+--------------
+The previous 16-position Thinker drain batch created 0.7--0.9 second holes in
+Talker code arrival.  One-position drain removes those holes.  The shared FIFO
+keeps Talker on CPU0 and Mimi on CPU3 while CPU1/2 execute short jobs from both
+dispatchers.  Its only spin lock covers enqueue/dequeue; compute is lock-free.
+The steady concurrent cadence is still about 99--128 ms for each 80 ms PCM
+frame, so uninterrupted real-time playback is not yet guaranteed.  This
+deficit must be fixed in model/kernel throughput and must not be hidden by
+delaying the first PCM frame.
+
+The trace above intentionally ran without a playback device to isolate model
+cadence.  Physical first-frame ALSA acceptance remains pending a live turn on
+the deployed always-listening service.

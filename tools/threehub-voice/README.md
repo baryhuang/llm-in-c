@@ -61,3 +61,29 @@ systemctl enable --now threehub-voice-assistant.service
 through each model before setting the pipeline state to `listening`; requests
 after that use the already-running servers. Raw validation measurements are in
 [`results.json`](results.json).
+
+## MiniMind-O native S2S runner
+
+`run-minimindo-native-a113x.sh` is the persistent launcher for the separate
+native MiniMind-O service. It pins the executable to GitHub release
+`minimindo-native-a113x-v1.3.0` and the unchanged packed model images to
+`minimindo-native-a113x-v1.0.0`. Missing or corrupt files are downloaded to a
+per-process `.part` file, verified by SHA-256, chmodded, and atomically renamed
+before execution. The default live policy is first-sentence completion with a
+32-text-step fallback; Mimi then drains staggered audio codebooks to EOS.
+
+The executable is native C11/AArch64 with no OpenMP or Python dependency. Its
+Mimi decoder always accepts one codec frame per call, uses the full
+250-position checkpoint attention window, and overlaps code decoding with
+Talker generation. Speaker delivery starts on the first decoded 80 ms PCM
+frame. It never waits for producer EOS, a frame watermark, or the complete
+response; continuity work must improve sustained model/codec throughput rather
+than hide latency in a start buffer.
+
+To populate and verify a volatile install without starting the service:
+
+```sh
+MINIMINDO_DOWNLOAD_ONLY=1 \
+  MINIMINDO_INSTALL_DIR=/dev/shm/minimindo-o-native-v1 \
+  ./run-minimindo-native-a113x.sh
+```

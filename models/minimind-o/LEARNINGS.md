@@ -7,17 +7,20 @@ Runtime constraint: native C11 on the box; no Python process and no OpenMP
 
 ## Final solution and measured results
 
-The final P1 prototype is one always-resident native-C service. It implements
-both input-token streaming and output-audio streaming; there is no production
-batch-mode switch:
+The final P1 prototype is one always-resident native-C service with one
+mandatory end-to-end streaming path. Input tokens enter the model while the
+user is speaking, every complete Talker code frame enters Mimi immediately,
+and the first decoded 1,920-sample/80 ms PCM frame is written to ALSA as soon
+as it exists. Waiting for producer EOS, a PCM watermark, or a complete response
+is a product violation, not a continuity option:
 
 ```text
 ALSA capture -> VAD -> PCM SPSC queue -> online SenseVoice/W8A8
                                           -> Thinker/Talker incremental prefill
-                                          -> ownership handoff at EOS
                                           -> Talker code SPSC queue
-                                          -> streaming Mimi decode
-                                          -> PCM SPSC queue -> ALSA playback
+                                          -> Mimi one-frame causal decode
+                                          -> first PCM frame -> ALSA immediately
+                                          -> subsequent PCM frames as produced
 ```
 
 The implementation makes the following production choices:
@@ -28,16 +31,23 @@ The implementation makes the following production choices:
 - SenseVoice commits 8 LFR center frames with 4 frames of right context. Each
   of its 70 layers retains a 32-frame K/V cache; the uncertain VAD tail is not
   committed until it becomes speech.
-- Cortex-A53 NEON W8A8 kernels and a three-worker persistent pthread pool use
-  all four CPU cores without OpenMP team creation.
+- Cortex-A53 NEON W8A8 kernels and a persistent pthread pool use all four CPU
+  cores without OpenMP team creation. Talker on CPU0 and Mimi on CPU3 share
+  workers on CPUs1--2 through a tiny compute FIFO; its spin lock covers only
+  enqueue/dequeue, never inference work.
 - Thinker/Talker state is single-owner. The input worker is joined at EOS and
   ownership is handed to the generation thread; model state has no mutex.
-- The four data paths are SPSC queues. Release/acquire atomics publish payloads;
-  a mutex is used only around an empty-queue condition-variable sleep and its
+- The data paths are SPSC queues. Release/acquire atomics publish payloads; a
+  mutex is used only around an empty-queue condition-variable sleep and its
   enqueue notification.
-- Talker frames are decoded as they are produced, and decoded PCM is written
-  directly to ALSA. Capture continues to drain while inference and playback
-  run.
+- Talker frames are decoded as they are produced. ALSA starts on decoded frame
+  one. Capture continues to drain while inference and playback run.
+- After text EOS, Thinker advances one bridge at a time. The rejected 16-step
+  bridge batch improved aggregate throughput but created a visible 0.7--0.9 s
+  hole in Talker code arrival and therefore was not streaming.
+- Mimi uses the checkpoint's complete 250-position attention window. A
+  64-position experiment was only 7% faster over 128 frames but changed the
+  long-form waveform, so it was rejected as an audio-quality optimization.
 - The executable and model releases are SHA256-pinned. The systemd runner
   verifies them, downloads missing artifacts through a `.part` file, and then
   starts the already-warm resident service.
@@ -52,20 +62,20 @@ The measured result on the A113X box is:
 | Input prefill correctness | positions `4 -> 12 -> 24 -> 37`; whole-prompt tokenizer parity |
 | Persistent compute pool | 2,000 job passes and 100 ownership handoffs passed |
 | Four-core text/audio workload | 8.23 s wall at 358% CPU; 40 Mimi frames |
-| Streaming Mimi, 8 frames/0.64 s PCM | 1.26 s wall; 6.19x faster than the original decoder |
-| Output overlap trace | first Talker frame 2.087 s, first Mimi frame 2.844 s, 9 frames decoded before producer EOS |
-| Physical playback fixture | first audio 8.044 s, playback end 9.469 s, zero ALSA underruns |
+| Streaming Mimi, 8 frames/0.64 s PCM | 0.62--0.69 s wall after exact NEON dot reuse; PCM SHA256 unchanged |
+| Streaming Mimi, 128 frames/10.24 s PCM | 10.69 s wall, 365% CPU; 64-position variant was 9.99 s |
+| Concurrent fixed-prompt trace | 27 of 28 frames decoded before producer EOS; no 16-step generation gaps |
+| Concurrent output cadence | mostly 100--125 ms per 80 ms frame; improved but not yet a guaranteed underrun-free RTF |
+| Mandatory playback policy | first decoded frame, 80 ms; no EOS/watermark/full-response gate |
 | Empty-cache boot recovery | 78 s download/restore; warm restart verification 6 s; warm-up 539 ms |
 
-These results prove the queueing, ownership, incremental-input, multi-core, and
-audio-output paths. They do **not** yet meet the 1--3 second full conversational
-latency target. The 1.11-second encoder number is a file-fed component test,
-not an end-to-end live result, and the physical playback fixture predates the
-final W8A8 input kernel. The remaining dominant costs are autoregressive
-Thinker/Talker generation and Mimi throughput: even after optimization, Mimi
-needs 1.26 seconds to synthesize 0.64 seconds of audio. A fresh combined live
-mic-to-speaker trace is therefore a required next acceptance test; the project
-must not infer it by adding unrelated microbenchmarks.
+These results prove the queueing, ownership, incremental-input, and first-frame
+audio path. They do **not** yet prove uninterrupted real-time playback: the
+current combined Thinker/Talker/Mimi cadence is usually 20--45 ms slower than
+each 80 ms audio frame. That remaining throughput deficit must be removed in
+the kernels/model path; it must not be hidden by delaying first audio. The
+small immediate safety-dialog model therefore remains a separate required
+product path, while MiniMind-O remains the accurate/native S2S prototype.
 
 This record captures the mistakes, measurements, and design rules learned
 while turning the first MiniMind-O speech-to-speech prototype into an
@@ -188,12 +198,17 @@ queue and a producer announces new data. No mutex covers:
 - frontend, encoder, projector, Thinker, Talker, or Mimi computation;
 - memcpy or queue payload ownership;
 - file or ALSA I/O;
-- worker-pool matrix dispatch.
+- worker-pool matrix execution.
 
-The persistent compute pool uses one SPSC mailbox per worker, atomic epochs,
-and futex sleep only between inference sessions. This replaced OpenMP team
-creation and its large context-switch/control overhead. The A113X acceptance
-test passed 2,000 parallel job passes and 100 session handoffs.
+The persistent compute pool uses one bounded FIFO so the Talker and Mimi
+dispatchers can share CPU1/2. A tiny atomic spin lock protects only FIFO
+enqueue/dequeue; a task executes after the lock is released. Atomic completion
+counters replace per-job condition variables, and workers futex-sleep only
+between inference sessions. This replaced OpenMP team creation and its large
+context-switch/control overhead. The acceptance test passed 2,000 single-
+dispatcher passes, 2,000 concurrent passes per dispatcher, and 100 session
+handoffs. It also exposed a lost-wakeup bug at the Talker/Mimi handoff; giving
+each dispatcher a reference-counted session fixed it before deployment.
 
 The lesson is not that every mutex is slow. The lesson is that a mutex should
 never compensate for unclear data ownership, and its protected interval must
@@ -240,7 +255,46 @@ post-speech wait = max(0, input work - speaking-time overlap)
 Measure and optimize each term separately. A smaller final number without
 stage events cannot prove which work was actually overlapped.
 
-## 7. Numerical similarity is necessary but not a quality claim
+## 7. Real streaming is a non-negotiable end-to-end contract
+
+The failed two-, eight-, 32-, and complete-response buffering experiments were
+useful diagnostics, but none is an acceptable product solution. They traded
+away time-to-first-audio and made an internal streaming decoder externally
+non-streaming. The corrected contract is:
+
+1. Capture publishes PCM while the user is speaking.
+2. Stable SenseVoice embeddings immediately advance Thinker/Talker state.
+3. Talker publishes every complete eight-codebook frame immediately.
+4. Mimi accepts exactly that one new frame and release-publishes its 80 ms PCM.
+5. ALSA receives frame one immediately, before producer EOS, and receives every
+   following frame as it arrives.
+
+The earlier 3+1 CPU partition was also wrong: a one-core Mimi frame took
+220--310 ms and guaranteed underruns. Production now keeps Talker on CPU0 and
+Mimi on CPU3, while both dispatchers share persistent CPU1/2 workers through a
+small FIFO. The only compute-pool lock is an atomic spin lock around FIFO
+enqueue/dequeue. No matrix, attention, convolution, KV update, or PCM copy is
+performed while holding it. A reference-counted session keeps workers awake
+through the producer/decoder handoff; an A113X test caught and fixed the lost-
+wakeup race before deployment.
+
+The 16-position Thinker drain batch was a second latency bug. It paused Talker
+code production for roughly 0.8 seconds even though its average throughput was
+better. Advancing one bridge per output step removes that hole and allowed
+27--28 of 28 frames to decode before producer EOS in the fixed-prompt tests.
+Combined production/decode cadence is now mostly 100--125 ms per 80 ms frame,
+so codec/model throughput still needs work. The shortfall is reported directly
+and is never converted into a hidden PCM start buffer.
+
+Mimi quality also constrains performance shortcuts. The optimized full
+250-position attention window decoded 128 frames/10.24 seconds of PCM in
+10.69 seconds. Reducing the window to 64 positions saved only 0.70 seconds
+(6.5%) and changed the long waveform, so production retains the checkpoint
+window. The useful wins came from precomputed RoPE, NEON QK/AV kernels, paired
+position W8A8 dots, persistent quantization/activation arenas, and removing
+per-frame allocation—not from throwing away model context.
+
+## 8. Numerical similarity is necessary but not a quality claim
 
 The W8A8 online embedding gate compared 15,360 float values against the Q8 x
 f32 online graph:
@@ -261,7 +315,7 @@ amount of work hidden during a live utterance. Live overlap must be established
 from timestamps around actual `speech_start`, `input_prefill`, and
 `speech_end` events.
 
-## 8. Logging must describe handoffs, not just stage completion
+## 9. Logging must describe handoffs, not just stage completion
 
 The useful production events are:
 
@@ -290,7 +344,7 @@ Final metrics distinguish input streaming, decoder/generation overlap, ALSA
 streaming, first-audio latency, producer completion, and codec drain. One
 generic `streaming=true` field is insufficient for debugging.
 
-## 9. Operational correctness is part of latency correctness
+## 10. Operational correctness is part of latency correctness
 
 Early versions suffered broken pipes, model warm-up failures, lost capture
 during inference, silent playback, and truncated audio. Those are pipeline
@@ -311,7 +365,7 @@ The production rules are:
 This prevents a fast benchmark binary from becoming a slow or nonfunctional
 product after reboot.
 
-## 10. What remains true after this increment
+## 11. What remains true after this increment
 
 - A sub-lookahead utterance may have no input commit before EOS; that is a
   consequence of the 240 ms right-context quality policy, not a batch fallback.
@@ -333,5 +387,9 @@ product after reboot.
   [`targets/a113x/README.md`](targets/a113x/README.md)
 - Machine-readable results:
   [`targets/a113x/results.json`](targets/a113x/results.json)
+- Historical rejected full-buffer speaker trace:
+  [`targets/a113x/benchmarks/v1.3.0-continuous-playback.log`](targets/a113x/benchmarks/v1.3.0-continuous-playback.log)
+- Current first-frame policy, kernel A/B, and shared-pool cadence trace:
+  [`targets/a113x/benchmarks/v1.4.0-real-streaming-a113x.log`](targets/a113x/benchmarks/v1.4.0-real-streaming-a113x.log)
 - Auto-download deployment runner:
   [`../../tools/threehub-voice/run-minimindo-native-a113x.sh`](../../tools/threehub-voice/run-minimindo-native-a113x.sh)

@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <float.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -21,6 +22,10 @@
 #endif
 
 enum { MMO_VERSION = 1, MMO_HEADER_BYTES = 4096, MMO_F32 = 1, MMO_Q8_ROW = 2 };
+
+#ifndef MINIMINDO_MIMI_STREAM_WINDOW
+#define MINIMINDO_MIMI_STREAM_WINDOW 250U
+#endif
 
 typedef struct {
     unsigned char magic[8];
@@ -79,6 +84,21 @@ struct minimindo_mimi_stream {
     uint32_t transformer_positions;
     float *upsample_tail;
     float *transformer_pair;
+    float *rope_cos;
+    float *rope_sin;
+    float *attention_scores;
+    uint32_t attention_window;
+    int8_t *q8_window_values;
+    float *q8_window_scales;
+    float *q8_window_scratch;
+    size_t q8_window_capacity;
+    size_t q8_scale_capacity;
+    float *frame_semantic;
+    float *frame_acoustic;
+    float *frame_projected;
+    float *frame_sequence;
+    float *conv_buffers[4];
+    size_t conv_buffer_capacity;
     mimi_conv_stream convs[14];
 };
 
@@ -154,6 +174,57 @@ static float q8_dot(const int8_t *weights, const float *input, uint32_t count)
 #endif
 }
 
+static void q8_dot_pair(const int8_t *weights, const float *first,
+                        const float *second, uint32_t count,
+                        float *first_sum, float *second_sum)
+{
+#if defined(__aarch64__)
+    float32x4_t first0 = vdupq_n_f32(0.0f);
+    float32x4_t first1 = vdupq_n_f32(0.0f);
+    float32x4_t first2 = vdupq_n_f32(0.0f);
+    float32x4_t first3 = vdupq_n_f32(0.0f);
+    float32x4_t second0 = vdupq_n_f32(0.0f);
+    float32x4_t second1 = vdupq_n_f32(0.0f);
+    float32x4_t second2 = vdupq_n_f32(0.0f);
+    float32x4_t second3 = vdupq_n_f32(0.0f);
+    uint32_t index = 0;
+    for (; index + 16U <= count; index += 16U) {
+        const int8x16_t packed = vld1q_s8(weights + index);
+        const int16x8_t low = vmovl_s8(vget_low_s8(packed));
+        const int16x8_t high = vmovl_s8(vget_high_s8(packed));
+        const float32x4_t weight0 =
+            vcvtq_f32_s32(vmovl_s16(vget_low_s16(low)));
+        const float32x4_t weight1 =
+            vcvtq_f32_s32(vmovl_s16(vget_high_s16(low)));
+        const float32x4_t weight2 =
+            vcvtq_f32_s32(vmovl_s16(vget_low_s16(high)));
+        const float32x4_t weight3 =
+            vcvtq_f32_s32(vmovl_s16(vget_high_s16(high)));
+        first0 = vfmaq_f32(first0,vld1q_f32(first + index),weight0);
+        first1 = vfmaq_f32(first1,vld1q_f32(first + index + 4U),weight1);
+        first2 = vfmaq_f32(first2,vld1q_f32(first + index + 8U),weight2);
+        first3 = vfmaq_f32(first3,vld1q_f32(first + index + 12U),weight3);
+        second0 = vfmaq_f32(second0,vld1q_f32(second + index),weight0);
+        second1 = vfmaq_f32(second1,vld1q_f32(second + index + 4U),weight1);
+        second2 = vfmaq_f32(second2,vld1q_f32(second + index + 8U),weight2);
+        second3 = vfmaq_f32(second3,vld1q_f32(second + index + 12U),weight3);
+    }
+    float first_total = vaddvq_f32(vaddq_f32(
+        vaddq_f32(first0,first1),vaddq_f32(first2,first3)));
+    float second_total = vaddvq_f32(vaddq_f32(
+        vaddq_f32(second0,second1),vaddq_f32(second2,second3)));
+    for (; index < count; ++index) {
+        first_total += weights[index] * first[index];
+        second_total += weights[index] * second[index];
+    }
+    *first_sum = first_total;
+    *second_sum = second_total;
+#else
+    *first_sum = q8_dot(weights,first,count);
+    *second_sum = q8_dot(weights,second,count);
+#endif
+}
+
 typedef struct {
     int8_t *values;
     float *scales;
@@ -165,16 +236,46 @@ static int32_t q8_i8_dot(const int8_t *weights, const int8_t *input,
 #if defined(__aarch64__)
     int32x4_t sum0 = vdupq_n_s32(0);
     int32x4_t sum1 = vdupq_n_s32(0);
+    int32x4_t sum2 = vdupq_n_s32(0);
+    int32x4_t sum3 = vdupq_n_s32(0);
     uint32_t index = 0;
-    for (; index + 16U <= count; index += 16U) {
-        const int8x16_t w = vld1q_s8(weights + index);
-        const int8x16_t x = vld1q_s8(input + index);
-        sum0 = vpadalq_s16(sum0,
-                           vmull_s8(vget_low_s8(w), vget_low_s8(x)));
-        sum1 = vpadalq_s16(sum1,
-                           vmull_s8(vget_high_s8(w), vget_high_s8(x)));
+    for (; index + 64U <= count; index += 64U) {
+        const int8x16_t w0 = vld1q_s8(weights + index);
+        const int8x16_t x0 = vld1q_s8(input + index);
+        const int8x16_t w1 = vld1q_s8(weights + index + 16U);
+        const int8x16_t x1 = vld1q_s8(input + index + 16U);
+        const int8x16_t w2 = vld1q_s8(weights + index + 32U);
+        const int8x16_t x2 = vld1q_s8(input + index + 32U);
+        const int8x16_t w3 = vld1q_s8(weights + index + 48U);
+        const int8x16_t x3 = vld1q_s8(input + index + 48U);
+        int16x8_t pair0 = vmull_s8(vget_low_s8(w0),vget_low_s8(x0));
+        pair0 = vmlal_s8(pair0,vget_low_s8(w1),vget_low_s8(x1));
+        int16x8_t pair1 = vmull_s8(vget_high_s8(w0),vget_high_s8(x0));
+        pair1 = vmlal_s8(pair1,vget_high_s8(w1),vget_high_s8(x1));
+        int16x8_t pair2 = vmull_s8(vget_low_s8(w2),vget_low_s8(x2));
+        pair2 = vmlal_s8(pair2,vget_low_s8(w3),vget_low_s8(x3));
+        int16x8_t pair3 = vmull_s8(vget_high_s8(w2),vget_high_s8(x2));
+        pair3 = vmlal_s8(pair3,vget_high_s8(w3),vget_high_s8(x3));
+        sum0 = vpadalq_s16(sum0,pair0);
+        sum1 = vpadalq_s16(sum1,pair1);
+        sum2 = vpadalq_s16(sum2,pair2);
+        sum3 = vpadalq_s16(sum3,pair3);
     }
-    int32_t sum = vaddvq_s32(vaddq_s32(sum0, sum1));
+    if (index + 32U <= count) {
+        const int8x16_t w0 = vld1q_s8(weights + index);
+        const int8x16_t x0 = vld1q_s8(input + index);
+        const int8x16_t w1 = vld1q_s8(weights + index + 16U);
+        const int8x16_t x1 = vld1q_s8(input + index + 16U);
+        int16x8_t pair0 = vmull_s8(vget_low_s8(w0),vget_low_s8(x0));
+        pair0 = vmlal_s8(pair0,vget_low_s8(w1),vget_low_s8(x1));
+        int16x8_t pair1 = vmull_s8(vget_high_s8(w0),vget_high_s8(x0));
+        pair1 = vmlal_s8(pair1,vget_high_s8(w1),vget_high_s8(x1));
+        sum0 = vpadalq_s16(sum0,pair0);
+        sum1 = vpadalq_s16(sum1,pair1);
+        index += 32U;
+    }
+    int32_t sum = vaddvq_s32(vaddq_s32(vaddq_s32(sum0, sum1),
+                                       vaddq_s32(sum2, sum3)));
     for (; index < count; ++index) sum += weights[index] * input[index];
     return sum;
 #else
@@ -185,15 +286,80 @@ static int32_t q8_i8_dot(const int8_t *weights, const int8_t *input,
 #endif
 }
 
+/* Transposed-convolution phases share the same activation window.  Evaluate
+ * four phase rows together so the A53 loads that input once instead of four
+ * times.  The accumulators remain int32, so this is bit-exact with four
+ * independent q8_i8_dot calls. */
+static void q8_i8_dot4_rows(const int8_t *weights, uint32_t row_stride,
+                            const int8_t *input, uint32_t count,
+                            int32_t output[4])
+{
+#if defined(__aarch64__)
+    int32x4_t sum00 = vdupq_n_s32(0), sum01 = sum00;
+    int32x4_t sum10 = sum00, sum11 = sum00;
+    int32x4_t sum20 = sum00, sum21 = sum00;
+    int32x4_t sum30 = sum00, sum31 = sum00;
+    uint32_t index = 0;
+    for (; index + 32U <= count; index += 32U) {
+        const int8x16_t input0 = vld1q_s8(input + index);
+        const int8x16_t input1 = vld1q_s8(input + index + 16U);
+#define DOT4_ROW(row) do { \
+        const int8_t *row_weights = weights + (size_t)(row) * row_stride; \
+        const int8x16_t weight0 = vld1q_s8(row_weights + index); \
+        const int8x16_t weight1 = vld1q_s8(row_weights + index + 16U); \
+        int16x8_t pair0 = vmull_s8(vget_low_s8(weight0), \
+                                    vget_low_s8(input0)); \
+        pair0 = vmlal_s8(pair0, vget_low_s8(weight1), \
+                         vget_low_s8(input1)); \
+        int16x8_t pair1 = vmull_s8(vget_high_s8(weight0), \
+                                    vget_high_s8(input0)); \
+        pair1 = vmlal_s8(pair1, vget_high_s8(weight1), \
+                         vget_high_s8(input1)); \
+        sum##row##0 = vpadalq_s16(sum##row##0, pair0); \
+        sum##row##1 = vpadalq_s16(sum##row##1, pair1); \
+    } while (0)
+        DOT4_ROW(0); DOT4_ROW(1); DOT4_ROW(2); DOT4_ROW(3);
+#undef DOT4_ROW
+    }
+    output[0] = vaddvq_s32(vaddq_s32(sum00, sum01));
+    output[1] = vaddvq_s32(vaddq_s32(sum10, sum11));
+    output[2] = vaddvq_s32(vaddq_s32(sum20, sum21));
+    output[3] = vaddvq_s32(vaddq_s32(sum30, sum31));
+    for (; index < count; ++index) {
+        const int8_t value = input[index];
+        output[0] += weights[index] * value;
+        output[1] += weights[row_stride + index] * value;
+        output[2] += weights[(size_t)2U * row_stride + index] * value;
+        output[3] += weights[(size_t)3U * row_stride + index] * value;
+    }
+#else
+    for (uint32_t row = 0; row < 4U; ++row)
+        output[row] = q8_i8_dot(weights + (size_t)row * row_stride,
+                                input, count);
+#endif
+}
+
 static float quantize_i8(const float *input, int8_t *output, uint32_t count)
 {
     float maximum = 0.0f;
 #if defined(__aarch64__)
-    float32x4_t vmax = vdupq_n_f32(0.0f);
+    float32x4_t vmax0 = vdupq_n_f32(0.0f);
+    float32x4_t vmax1 = vdupq_n_f32(0.0f);
+    float32x4_t vmax2 = vdupq_n_f32(0.0f);
+    float32x4_t vmax3 = vdupq_n_f32(0.0f);
     uint32_t index = 0;
-    for (; index + 4U <= count; index += 4U)
-        vmax = vmaxq_f32(vmax, vabsq_f32(vld1q_f32(input + index)));
-    maximum = vmaxvq_f32(vmax);
+    for (; index + 16U <= count; index += 16U) {
+        vmax0 = vmaxq_f32(vmax0,
+                          vabsq_f32(vld1q_f32(input + index)));
+        vmax1 = vmaxq_f32(vmax1,
+                          vabsq_f32(vld1q_f32(input + index + 4U)));
+        vmax2 = vmaxq_f32(vmax2,
+                          vabsq_f32(vld1q_f32(input + index + 8U)));
+        vmax3 = vmaxq_f32(vmax3,
+                          vabsq_f32(vld1q_f32(input + index + 12U)));
+    }
+    maximum = vmaxvq_f32(vmaxq_f32(vmaxq_f32(vmax0, vmax1),
+                                    vmaxq_f32(vmax2, vmax3)));
     for (; index < count; ++index) {
         const float value = fabsf(input[index]);
         if (value > maximum) maximum = value;
@@ -275,8 +441,11 @@ static void matvec_pair_rows(void *opaque, size_t begin, size_t end)
     for (size_t row = begin; row < end; ++row) {
         const int8_t *weights; float scale;
         q8_row(matrix,(uint32_t)row,&weights,&scale);
-        context->output[row]=q8_dot(weights,context->input,columns)*scale;
-        context->output[rows+row]=q8_dot(weights,context->input+columns,columns)*scale;
+        float first, second;
+        q8_dot_pair(weights,context->input,context->input+columns,columns,
+                    &first,&second);
+        context->output[row]=first*scale;
+        context->output[rows+row]=second*scale;
     }
 }
 
@@ -476,7 +645,7 @@ static int transformer(minimindo_mimi *model, float *sequence, uint32_t length)
             const uint32_t first = pos + 1 > window ? pos + 1 - window : 0;
             for (uint32_t head = 0; head < heads; ++head) {
                 const float *q = model->query + (size_t)head * d;
-                double maximum = -INFINITY;
+                double maximum = -DBL_MAX;
                 for (uint32_t source = first; source <= pos; ++source) {
                     const size_t base = ((size_t)li * length + source) * h + (size_t)head * d;
                     double score = 0;
@@ -570,23 +739,21 @@ static void causal_q8_positions(void *opaque,size_t begin,size_t end)
 
 static q8_windows causal_q8_windows(const float *input, const float *history,
                                     uint32_t channels, uint32_t kernel,
-                                    uint32_t length)
+                                    uint32_t length,
+                                    minimindo_mimi_stream *stream)
 {
     const uint32_t columns = channels * kernel;
-    q8_windows result = {
-        .values = malloc((size_t)length * columns),
-        .scales = malloc((size_t)length * sizeof(float))
-    };
-    float *scratch = malloc((size_t)length * columns * sizeof(float));
-    if (result.values == NULL || result.scales == NULL || scratch == NULL) {
-        free(result.values);
-        free(result.scales);
-        free(scratch);
+    const size_t values = (size_t)length * columns;
+    if (values > stream->q8_window_capacity ||
+        length > stream->q8_scale_capacity)
         return (q8_windows){0};
-    }
+    q8_windows result = {
+        .values = stream->q8_window_values,
+        .scales = stream->q8_window_scales
+    };
+    float *scratch = stream->q8_window_scratch;
     causal_q8_context context={input,history,scratch,result,channels,kernel,length};
     minimindo_parallel_for(length,causal_q8_positions,&context);
-    free(scratch);
     return result;
 }
 
@@ -652,23 +819,21 @@ static void deconv_q8_positions(void *opaque,size_t begin,size_t end)
 }
 
 static q8_windows deconv_q8_windows(const float *input, const float *history,
-                                    uint32_t channels, uint32_t length)
+                                    uint32_t channels, uint32_t length,
+                                    minimindo_mimi_stream *stream)
 {
     const uint32_t columns = channels * 2U;
-    q8_windows result = {
-        .values = malloc((size_t)length * columns),
-        .scales = malloc((size_t)length * sizeof(float))
-    };
-    float *scratch = malloc((size_t)length * columns * sizeof(float));
-    if (result.values == NULL || result.scales == NULL || scratch == NULL) {
-        free(result.values);
-        free(result.scales);
-        free(scratch);
+    const size_t values = (size_t)length * columns;
+    if (values > stream->q8_window_capacity ||
+        length > stream->q8_scale_capacity)
         return (q8_windows){0};
-    }
+    q8_windows result = {
+        .values = stream->q8_window_values,
+        .scales = stream->q8_window_scales
+    };
+    float *scratch = stream->q8_window_scratch;
     deconv_q8_context context={input,history,scratch,result,channels,length};
     minimindo_parallel_for(length,deconv_q8_positions,&context);
-    free(scratch);
     return result;
 }
 
@@ -737,14 +902,153 @@ static float *residual_block(minimindo_mimi *model, uint32_t first_index,
     return second;
 }
 
+static float dot_f32(const float *left, const float *right, uint32_t count)
+{
+#if defined(__aarch64__)
+    float32x4_t sum0 = vdupq_n_f32(0.0f);
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    float32x4_t sum2 = vdupq_n_f32(0.0f);
+    float32x4_t sum3 = vdupq_n_f32(0.0f);
+    uint32_t index = 0;
+    for (; index + 16U <= count; index += 16U) {
+        sum0 = vfmaq_f32(sum0, vld1q_f32(left + index),
+                         vld1q_f32(right + index));
+        sum1 = vfmaq_f32(sum1, vld1q_f32(left + index + 4U),
+                         vld1q_f32(right + index + 4U));
+        sum2 = vfmaq_f32(sum2, vld1q_f32(left + index + 8U),
+                         vld1q_f32(right + index + 8U));
+        sum3 = vfmaq_f32(sum3, vld1q_f32(left + index + 12U),
+                         vld1q_f32(right + index + 12U));
+    }
+    float sum = vaddvq_f32(vaddq_f32(vaddq_f32(sum0, sum1),
+                                     vaddq_f32(sum2, sum3)));
+    for (; index < count; ++index) sum += left[index] * right[index];
+    return sum;
+#else
+    float sum = 0.0f;
+    for (uint32_t index = 0; index < count; ++index)
+        sum += left[index] * right[index];
+    return sum;
+#endif
+}
+
+static void rope_cached(float *states, uint32_t heads, uint32_t dim,
+                        const float *cosines, const float *sines)
+{
+    const uint32_t half = dim / 2U;
+    for (uint32_t head = 0; head < heads; ++head) {
+        float *values = states + (size_t)head * dim;
+        for (uint32_t index = 0; index < half; ++index) {
+            const float first = values[index];
+            const float second = values[index + half];
+            values[index] = first * cosines[index] - second * sines[index];
+            values[index + half] =
+                second * cosines[index] + first * sines[index];
+        }
+    }
+}
+
+typedef struct {
+    minimindo_mimi *model;
+    uint32_t layer;
+    uint32_t position;
+    uint32_t window;
+    const float *query;
+    float *attention;
+    float *scores;
+} stream_attention_context;
+
+static void stream_attention_tasks(void *opaque, size_t begin, size_t end)
+{
+    stream_attention_context *context = opaque;
+    minimindo_mimi *model = context->model;
+    const uint32_t heads = model->header->heads;
+    const uint32_t dim = model->header->head_dim;
+    const uint32_t hidden = model->header->hidden;
+    const uint32_t window = context->window;
+    const uint32_t cache_stride = model->max_frames * 2U;
+    const float inverse_root = 1.0f / sqrtf((float)dim);
+    for (size_t task = begin; task < end; ++task) {
+        const uint32_t slot = (uint32_t)(task / heads);
+        const uint32_t head = (uint32_t)(task % heads);
+        const uint32_t absolute = context->position + slot;
+        const uint32_t first = absolute + 1U > window
+            ? absolute + 1U - window : 0U;
+        const uint32_t count = absolute - first + 1U;
+        const float *head_query = context->query +
+            (size_t)slot * hidden + (size_t)head * dim;
+        float *scores = context->scores + task * window;
+        float maximum = -FLT_MAX;
+        for (uint32_t offset = 0; offset < count; ++offset) {
+            const uint32_t source = first + offset;
+            const size_t cache =
+                ((size_t)context->layer * cache_stride + source) * hidden +
+                (size_t)head * dim;
+            const float score = dot_f32(
+                head_query, model->key_cache + cache, dim) * inverse_root;
+            scores[offset] = score;
+            if (score > maximum) maximum = score;
+        }
+        float denominator = 0.0f;
+        for (uint32_t offset = 0; offset < count; ++offset) {
+            const float weight = expf(scores[offset] - maximum);
+            scores[offset] = weight;
+            denominator += weight;
+        }
+        float *destination = context->attention +
+            (size_t)slot * hidden + (size_t)head * dim;
+        const float inverse_denominator = 1.0f / denominator;
+        uint32_t index = 0;
+#if defined(__aarch64__)
+        for (; index + 16U <= dim; index += 16U) {
+            float32x4_t sum0 = vdupq_n_f32(0.0f);
+            float32x4_t sum1 = vdupq_n_f32(0.0f);
+            float32x4_t sum2 = vdupq_n_f32(0.0f);
+            float32x4_t sum3 = vdupq_n_f32(0.0f);
+            for (uint32_t offset = 0; offset < count; ++offset) {
+                const uint32_t source = first + offset;
+                const size_t cache =
+                    ((size_t)context->layer * cache_stride + source) * hidden +
+                    (size_t)head * dim + index;
+                const float weight = scores[offset];
+                const float *value = model->value_cache + cache;
+                sum0 = vfmaq_n_f32(sum0, vld1q_f32(value), weight);
+                sum1 = vfmaq_n_f32(sum1, vld1q_f32(value + 4U), weight);
+                sum2 = vfmaq_n_f32(sum2, vld1q_f32(value + 8U), weight);
+                sum3 = vfmaq_n_f32(sum3, vld1q_f32(value + 12U), weight);
+            }
+            const float32x4_t inverse = vdupq_n_f32(inverse_denominator);
+            vst1q_f32(destination + index, vmulq_f32(sum0, inverse));
+            vst1q_f32(destination + index + 4U,
+                       vmulq_f32(sum1, inverse));
+            vst1q_f32(destination + index + 8U,
+                       vmulq_f32(sum2, inverse));
+            vst1q_f32(destination + index + 12U,
+                       vmulq_f32(sum3, inverse));
+        }
+#endif
+        for (; index < dim; ++index) {
+            float sum = 0.0f;
+            for (uint32_t offset = 0; offset < count; ++offset) {
+                const uint32_t source = first + offset;
+                const size_t cache =
+                    ((size_t)context->layer * cache_stride + source) * hidden +
+                    (size_t)head * dim + index;
+                sum += scores[offset] * model->value_cache[cache];
+            }
+            destination[index] = sum * inverse_denominator;
+        }
+    }
+}
+
 static int transformer_stream_pair(minimindo_mimi *model, uint32_t position,
+                                   minimindo_mimi_stream *stream,
                                    const float *input, float *output,
                                    float *scratch)
 {
     const uint32_t h = model->header->hidden;
     const uint32_t heads = model->header->heads;
     const uint32_t d = model->header->head_dim;
-    const uint32_t window = model->header->sliding_window;
     const uint32_t cache_stride = model->max_frames * 2U;
     const uint32_t m = model->header->intermediate;
     if (position + 1U >= cache_stride) return -1;
@@ -768,61 +1072,33 @@ static int transformer_stream_pair(minimindo_mimi *model, uint32_t position,
                        f32_data(&layer->input_bias),
                        normed + (size_t)slot * h, h,
                        model->header->norm_epsilon);
-        matvec_pair(&layer->q, normed, query);
-        matvec_pair(&layer->k, normed, key);
-        matvec_pair(&layer->v, normed, value);
+        matvec_pair(&layer->q,normed,query);
+        matvec_pair(&layer->k,normed,key);
+        matvec_pair(&layer->v,normed,value);
         for (uint32_t slot = 0; slot < 2U; ++slot) {
             const uint32_t absolute = position + slot;
-            rope(query + (size_t)slot * h, heads, d, absolute,
-                 model->header->rope_theta);
-            rope(key + (size_t)slot * h, heads, d, absolute,
-                 model->header->rope_theta);
+            const float *cosines = stream->rope_cos +
+                (size_t)absolute * (d / 2U);
+            const float *sines = stream->rope_sin +
+                (size_t)absolute * (d / 2U);
+            rope_cached(query + (size_t)slot * h, heads, d,
+                        cosines, sines);
+            rope_cached(key + (size_t)slot * h, heads, d,
+                        cosines, sines);
             const size_t cache =
                 ((size_t)li * cache_stride + absolute) * h;
             memcpy(model->key_cache + cache, key + (size_t)slot * h,
                    (size_t)h * sizeof(float));
             memcpy(model->value_cache + cache, value + (size_t)slot * h,
                    (size_t)h * sizeof(float));
-            const uint32_t first = absolute + 1U > window
-                ? absolute + 1U - window : 0U;
-            for (uint32_t head = 0; head < heads; ++head) {
-                const float *head_query = query + (size_t)slot * h +
-                                          (size_t)head * d;
-                double maximum = -INFINITY;
-                for (uint32_t source = first; source <= absolute; ++source) {
-                    const size_t base =
-                        ((size_t)li * cache_stride + source) * h +
-                        (size_t)head * d;
-                    double score = 0.0;
-                    for (uint32_t index = 0; index < d; ++index)
-                        score += (double)head_query[index] *
-                                 model->key_cache[base + index];
-                    model->scores[source] =
-                        (float)(score / sqrt((double)d));
-                    if (model->scores[source] > maximum)
-                        maximum = model->scores[source];
-                }
-                double denominator = 0.0;
-                for (uint32_t source = first; source <= absolute; ++source) {
-                    model->scores[source] =
-                        (float)exp(model->scores[source] - maximum);
-                    denominator += model->scores[source];
-                }
-                for (uint32_t index = 0; index < d; ++index) {
-                    double sum = 0.0;
-                    for (uint32_t source = first; source <= absolute; ++source) {
-                        const size_t base =
-                            ((size_t)li * cache_stride + source) * h +
-                            (size_t)head * d;
-                        sum += model->scores[source] *
-                               model->value_cache[base + index];
-                    }
-                    attention[(size_t)slot * h + (size_t)head * d + index] =
-                        (float)(sum / denominator);
-                }
-            }
         }
-        matvec_pair(&layer->o, attention, projected);
+        stream_attention_context attention_context = {
+            model, li, position, stream->attention_window, query, attention,
+            stream->attention_scores
+        };
+        minimindo_parallel_for((size_t)2U * heads,
+                               stream_attention_tasks,&attention_context);
+        matvec_pair(&layer->o,attention,projected);
         const float *attention_scale = f32_data(&layer->attention_scale);
         for (uint32_t slot = 0; slot < 2U; ++slot) {
             for (uint32_t index = 0; index < h; ++index)
@@ -835,10 +1111,10 @@ static int transformer_stream_pair(minimindo_mimi *model, uint32_t position,
                        normed + (size_t)slot * h, h,
                        model->header->norm_epsilon);
         }
-        matvec_pair(&layer->fc1, normed, mlp);
+        matvec_pair(&layer->fc1,normed,mlp);
         for (uint32_t index = 0; index < m * 2U; ++index)
             mlp[index] = gelu(mlp[index]);
-        matvec_pair(&layer->fc2, mlp, projected);
+        matvec_pair(&layer->fc2,mlp,projected);
         const float *mlp_scale = f32_data(&layer->mlp_scale);
         for (uint32_t slot = 0; slot < 2U; ++slot)
             for (uint32_t index = 0; index < h; ++index)
@@ -869,23 +1145,20 @@ static void stream_conv_cells(void *opaque,size_t begin,size_t end)
             q8_i8_dot(weights,context->windows.values+(size_t)t*columns,columns);}
 }
 
-static float *stream_conv1d(mimi_conv_stream *state,
-                            const decoder_conv *conv, const float *input,
-                            uint32_t length)
+static int stream_conv1d(minimindo_mimi_stream *stream,
+                         mimi_conv_stream *state,
+                         const decoder_conv *conv, const float *input,
+                         uint32_t length, float *output)
 {
-    float *output = malloc((size_t)conv->out_channels * length * sizeof(float));
-    if (output == NULL) return NULL;
     const uint32_t history_length = conv->kernel - 1U;
     q8_windows windows = causal_q8_windows(
-        input, state->history, conv->in_channels, conv->kernel, length);
+        input, state->history, conv->in_channels, conv->kernel, length,
+        stream);
     if (windows.values == NULL) {
-        free(output);
-        return NULL;
+        return -1;
     }
     stream_conv_context context={conv,windows,output,length};
     minimindo_parallel_for((size_t)conv->out_channels*length,stream_conv_cells,&context);
-    free(windows.values);
-    free(windows.scales);
     if (history_length != 0U) {
         for (uint32_t in = 0; in < conv->in_channels; ++in) {
             float *history = state->history + (size_t)in * history_length;
@@ -901,7 +1174,7 @@ static float *stream_conv1d(mimi_conv_stream *state,
             }
         }
     }
-    return output;
+    return 0;
 }
 
 static void stream_deconv_cells(void *opaque,size_t begin,size_t end)
@@ -913,69 +1186,39 @@ static void stream_deconv_cells(void *opaque,size_t begin,size_t end)
         const int8_t *unused;float scale;q8_row(&conv->weight,out,&unused,&scale);
         const int8_t *window=context->windows.values+(size_t)t*columns;
         float *row=context->output+(size_t)out*result_length+(size_t)t*conv->stride;
-        for(uint32_t phase=0;phase<conv->stride;++phase){const int8_t *weights=conv->phase_weights+
-            ((size_t)out*conv->stride+phase)*columns;row[phase]=bias[out]+scale*context->windows.scales[t]*q8_i8_dot(weights,window,columns);}}
+        const int8_t *weights=conv->phase_weights+
+            (size_t)out*conv->stride*columns;
+        const float combined_scale=scale*context->windows.scales[t];
+        uint32_t phase=0;
+        for(;phase+4U<=conv->stride;phase+=4U){int32_t sums[4];
+            q8_i8_dot4_rows(weights+(size_t)phase*columns,columns,window,
+                            columns,sums);
+            for(uint32_t lane=0;lane<4U;++lane)
+                row[phase+lane]=bias[out]+combined_scale*sums[lane];}
+        for(;phase<conv->stride;++phase)
+            row[phase]=bias[out]+combined_scale*q8_i8_dot(
+                weights+(size_t)phase*columns,window,columns);}
 }
 
-static float *stream_conv_transpose(mimi_conv_stream *state,
-                                    const decoder_conv *conv,
-                                    const float *input, uint32_t length,
-                                    uint32_t *output_length)
+static int stream_conv_transpose(minimindo_mimi_stream *stream,
+                                 mimi_conv_stream *state,
+                                 const decoder_conv *conv,
+                                 const float *input, uint32_t length,
+                                 float *output, uint32_t *output_length)
 {
     const uint32_t result_length = length * conv->stride;
-    float *output = malloc((size_t)conv->out_channels * result_length *
-                           sizeof(float));
-    if (output == NULL) return NULL;
     q8_windows windows = deconv_q8_windows(
-        input, state->history, conv->in_channels, length);
+        input, state->history, conv->in_channels, length, stream);
     if (windows.values == NULL || conv->phase_weights == NULL ||
         conv->kernel != conv->stride * 2U) {
-        free(windows.values);
-        free(windows.scales);
-        free(output);
-        return NULL;
+        return -1;
     }
     stream_conv_context context={conv,windows,output,length};
     minimindo_parallel_for((size_t)conv->out_channels*length,stream_deconv_cells,&context);
-    free(windows.values);
-    free(windows.scales);
     for (uint32_t in = 0; in < conv->in_channels; ++in)
         state->history[in] = input[(size_t)in * length + length - 1U];
     *output_length = result_length;
-    return output;
-}
-
-static float *stream_residual_block(minimindo_mimi_stream *stream,
-                                    uint32_t first_index, float *input,
-                                    uint32_t channels, uint32_t length)
-{
-    const size_t count = (size_t)channels * length;
-    float *skip = malloc(count * sizeof(float));
-    if (skip == NULL) return NULL;
-    memcpy(skip, input, count * sizeof(float));
-    activate_elu(input, count);
-    float *first = stream_conv1d(&stream->convs[first_index],
-                                 &stream->model->convs[first_index],
-                                 input, length);
-    if (first == NULL) {
-        free(skip);
-        return NULL;
-    }
-    activate_elu(first,
-                 (size_t)stream->model->convs[first_index].out_channels *
-                 length);
-    float *second = stream_conv1d(&stream->convs[first_index + 1U],
-                                  &stream->model->convs[first_index + 1U],
-                                  first, length);
-    free(first);
-    if (second == NULL) {
-        free(skip);
-        return NULL;
-    }
-    for (size_t index = 0; index < count; ++index)
-        second[index] += skip[index];
-    free(skip);
-    return second;
+    return 0;
 }
 
 minimindo_mimi_stream *minimindo_mimi_stream_open(
@@ -989,12 +1232,77 @@ minimindo_mimi_stream *minimindo_mimi_stream_open(
     if (stream == NULL) return NULL;
     stream->model = model;
     const uint32_t h = model->header->hidden;
+    const uint32_t half_head = model->header->head_dim / 2U;
+    const size_t positions = (size_t)model->max_frames * 2U;
+    const size_t rope_values = positions * half_head;
+    stream->attention_window = model->header->sliding_window;
+    if (stream->attention_window > MINIMINDO_MIMI_STREAM_WINDOW)
+        stream->attention_window = MINIMINDO_MIMI_STREAM_WINDOW;
+    const size_t attention_values =
+        (size_t)2U * model->header->heads * stream->attention_window;
+    size_t q8_window_capacity = 0U;
+    size_t q8_scale_capacity = 0U;
+    size_t conv_buffer_capacity = (size_t)h * 2U;
+    uint32_t stream_length = 2U;
+    for (uint32_t index = 0; index < 14U; ++index) {
+        const decoder_conv *conv = &model->convs[index];
+        const size_t columns = (size_t)conv->in_channels *
+            (conv->transpose ? 2U : conv->kernel);
+        const size_t values = columns * stream_length;
+        if (values > q8_window_capacity) q8_window_capacity = values;
+        if (stream_length > q8_scale_capacity)
+            q8_scale_capacity = stream_length;
+        if (conv->transpose) stream_length *= conv->stride;
+        const size_t activation_values =
+            (size_t)conv->out_channels * stream_length;
+        if (activation_values > conv_buffer_capacity)
+            conv_buffer_capacity = activation_values;
+    }
     stream->upsample_tail = calloc((size_t)h * 2U, sizeof(float));
     stream->transformer_pair = malloc(
         ((size_t)h * 16U + (size_t)model->header->intermediate * 2U) *
         sizeof(float));
-    if (stream->upsample_tail == NULL || stream->transformer_pair == NULL)
+    stream->rope_cos = malloc(rope_values * sizeof(*stream->rope_cos));
+    stream->rope_sin = malloc(rope_values * sizeof(*stream->rope_sin));
+    stream->attention_scores = malloc(
+        attention_values * sizeof(*stream->attention_scores));
+    stream->q8_window_values = malloc(q8_window_capacity);
+    stream->q8_window_scales = malloc(
+        q8_scale_capacity * sizeof(*stream->q8_window_scales));
+    stream->q8_window_scratch = malloc(
+        q8_window_capacity * sizeof(*stream->q8_window_scratch));
+    stream->q8_window_capacity = q8_window_capacity;
+    stream->q8_scale_capacity = q8_scale_capacity;
+    stream->frame_semantic = malloc((size_t)h * sizeof(float));
+    stream->frame_acoustic = malloc((size_t)h * sizeof(float));
+    stream->frame_projected = malloc((size_t)h * sizeof(float));
+    stream->frame_sequence = malloc((size_t)h * 2U * sizeof(float));
+    stream->conv_buffer_capacity = conv_buffer_capacity;
+    for (uint32_t index = 0; index < 4U; ++index)
+        stream->conv_buffers[index] = malloc(
+            conv_buffer_capacity * sizeof(float));
+    if (stream->upsample_tail == NULL || stream->transformer_pair == NULL ||
+        stream->rope_cos == NULL || stream->rope_sin == NULL ||
+        stream->attention_scores == NULL ||
+        stream->q8_window_values == NULL ||
+        stream->q8_window_scales == NULL ||
+        stream->q8_window_scratch == NULL ||
+        stream->frame_semantic == NULL || stream->frame_acoustic == NULL ||
+        stream->frame_projected == NULL || stream->frame_sequence == NULL ||
+        stream->conv_buffers[0] == NULL || stream->conv_buffers[1] == NULL ||
+        stream->conv_buffers[2] == NULL || stream->conv_buffers[3] == NULL)
         goto oom;
+    for (uint32_t position = 0; position < positions; ++position) {
+        for (uint32_t index = 0; index < half_head; ++index) {
+            const double angle = position /
+                pow((double)model->header->rope_theta,
+                    (2.0 * index) / model->header->head_dim);
+            stream->rope_cos[(size_t)position * half_head + index] =
+                (float)cos(angle);
+            stream->rope_sin[(size_t)position * half_head + index] =
+                (float)sin(angle);
+        }
+    }
     for (uint32_t index = 0; index < 14; ++index) {
         const decoder_conv *conv = &model->convs[index];
         if (conv->transpose) {
@@ -1046,6 +1354,18 @@ void minimindo_mimi_stream_close(minimindo_mimi_stream *stream)
     if (stream == NULL) return;
     free(stream->upsample_tail);
     free(stream->transformer_pair);
+    free(stream->rope_cos);
+    free(stream->rope_sin);
+    free(stream->attention_scores);
+    free(stream->q8_window_values);
+    free(stream->q8_window_scales);
+    free(stream->q8_window_scratch);
+    free(stream->frame_semantic);
+    free(stream->frame_acoustic);
+    free(stream->frame_projected);
+    free(stream->frame_sequence);
+    for (uint32_t index = 0; index < 4U; ++index)
+        free(stream->conv_buffers[index]);
     for (uint32_t index = 0; index < 14; ++index) {
         free(stream->convs[index].history);
     }
@@ -1086,7 +1406,12 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
     double profile_previous = profile_start;
     double profile_codebooks = 0.0, profile_transformer = 0.0;
     double profile_conv0 = 0.0, profile_stages[4] = {0};
-    if (stream == NULL || codes == NULL || audio == NULL || frames == 0U ||
+    if (frames != 1U) {
+        set_error(error, error_capacity,
+                  "Mimi streaming accepts exactly one codec frame per push");
+        return -1;
+    }
+    if (stream == NULL || codes == NULL || audio == NULL ||
         stream->frames + frames > stream->model->max_frames ||
         audio_capacity < minimindo_mimi_samples_for_frames(stream->model,
                                                            frames)) {
@@ -1097,10 +1422,11 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
     const uint32_t h = model->header->hidden;
     const uint32_t cd = model->header->codebook_dim;
     const uint32_t length = (uint32_t)frames;
-    float *semantic = calloc((size_t)h * frames, sizeof(float));
-    float *acoustic = calloc((size_t)h * frames, sizeof(float));
-    float *projected = malloc((size_t)h * sizeof(float));
-    if (semantic == NULL || acoustic == NULL || projected == NULL) goto oom;
+    float *semantic = stream->frame_semantic;
+    float *acoustic = stream->frame_acoustic;
+    float *projected = stream->frame_projected;
+    memset(semantic, 0, (size_t)h * sizeof(*semantic));
+    memset(acoustic, 0, (size_t)h * sizeof(*acoustic));
     for (uint32_t codebook = 0; codebook < MINIMINDO_MIMI_CODEBOOKS;
          ++codebook) {
         const float *book = f32_data(&model->codebooks[codebook]);
@@ -1111,9 +1437,6 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
             const uint32_t code = codes[(size_t)codebook * frames + t];
             if (code >= model->header->codebook_size) {
                 set_error(error, error_capacity, "Mimi code is out of range");
-                free(semantic);
-                free(acoustic);
-                free(projected);
                 return -1;
             }
             matvec(projection, book + (size_t)code * cd, projected);
@@ -1124,22 +1447,17 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
             }
         }
     }
-    free(projected);
-    projected = NULL;
     if (profile) {
         const double now = seconds();
         profile_codebooks = now - profile_previous;
         profile_previous = now;
     }
     const uint32_t sequence_length = length * 2U;
-    float *sequence = calloc((size_t)h * sequence_length, sizeof(float));
-    if (sequence == NULL) goto oom;
+    float *sequence = stream->frame_sequence;
+    memset(sequence, 0,
+           (size_t)h * sequence_length * sizeof(*sequence));
     upsample_parallel_context upsample_context={model,stream,semantic,acoustic,sequence,length,sequence_length};
     minimindo_parallel_for(h,upsample_channels,&upsample_context);
-    free(semantic);
-    free(acoustic);
-    semantic = NULL;
-    acoustic = NULL;
     const size_t scratch_floats = (size_t)h * 14U +
                                   (size_t)model->header->intermediate * 2U;
     float *position_pair = stream->transformer_pair + scratch_floats;
@@ -1151,9 +1469,8 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
                 sequence[(size_t)channel * sequence_length + t + 1U];
         }
         if (transformer_stream_pair(model, stream->transformer_positions,
-                                    position_pair, position_pair,
+                                    stream, position_pair, position_pair,
                                     stream->transformer_pair) != 0) {
-            free(sequence);
             set_error(error, error_capacity,
                       "Mimi stream transformer context exhausted");
             return -1;
@@ -1171,10 +1488,10 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
         profile_transformer = now - profile_previous;
         profile_previous = now;
     }
-    float *current = stream_conv1d(&stream->convs[0], &model->convs[0],
-                                   sequence, sequence_length);
-    free(sequence);
-    if (current == NULL) goto oom_simple;
+    float *current = stream->conv_buffers[0];
+    if (stream_conv1d(stream,&stream->convs[0], &model->convs[0],
+                      sequence, sequence_length, current) != 0)
+        goto workspace_error;
     if (profile) {
         const double now = seconds();
         profile_conv0 = now - profile_previous;
@@ -1189,17 +1506,32 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
                      (size_t)model->convs[deconv].in_channels *
                      current_length);
         uint32_t next_length = 0;
-        float *next = stream_conv_transpose(&stream->convs[deconv],
-                                            &model->convs[deconv], current,
-                                            current_length, &next_length);
-        free(current);
-        if (next == NULL) goto oom_simple;
-        float *residual = stream_residual_block(
-            stream, residuals[stage], next,
-            model->convs[deconv].out_channels, next_length);
-        free(next);
-        if (residual == NULL) goto oom_simple;
-        current = residual;
+        float *next = stream->conv_buffers[1];
+        if (stream_conv_transpose(stream,&stream->convs[deconv],
+                                  &model->convs[deconv], current,
+                                  current_length,next,&next_length) != 0)
+            goto workspace_error;
+        const uint32_t residual = residuals[stage];
+        const size_t count =
+            (size_t)model->convs[deconv].out_channels * next_length;
+        float *activated = stream->conv_buffers[2];
+        float *first = stream->conv_buffers[3];
+        memcpy(activated,next,count*sizeof(*activated));
+        activate_elu(activated,count);
+        if (stream_conv1d(stream,&stream->convs[residual],
+                          &model->convs[residual],activated,next_length,
+                          first) != 0)
+            goto workspace_error;
+        activate_elu(first,
+                     (size_t)model->convs[residual].out_channels *
+                     next_length);
+        current = stream->conv_buffers[0];
+        if (stream_conv1d(stream,&stream->convs[residual + 1U],
+                          &model->convs[residual + 1U],first,next_length,
+                          current) != 0)
+            goto workspace_error;
+        for (size_t index = 0; index < count; ++index)
+            current[index] += next[index];
         current_length = next_length;
         if (profile) {
             const double now = seconds();
@@ -1209,12 +1541,9 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
     }
     activate_elu(current,
                  (size_t)model->convs[13].in_channels * current_length);
-    float *final = stream_conv1d(&stream->convs[13], &model->convs[13],
-                                 current, current_length);
-    free(current);
-    if (final == NULL) goto oom_simple;
-    memcpy(audio, final, (size_t)current_length * sizeof(float));
-    free(final);
+    if (stream_conv1d(stream,&stream->convs[13], &model->convs[13],
+                      current, current_length,audio) != 0)
+        goto workspace_error;
     stream->frames += length;
     if (audio_samples != NULL) *audio_samples = current_length;
     if (profile) {
@@ -1231,12 +1560,8 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
                 (seconds() - profile_start) * 1000.0);
     }
     return 0;
-oom:
-    free(semantic);
-    free(acoustic);
-    free(projected);
-oom_simple:
-    set_error(error, error_capacity, "out of memory in Mimi stream decoder");
+workspace_error:
+    set_error(error, error_capacity, "Mimi stream workspace failure");
     return -3;
 }
 

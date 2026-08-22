@@ -15,22 +15,28 @@
 #include <unistd.h>
 #endif
 
-enum { MAX_THREADS = 4, BACKGROUND_WORKERS = 3 };
+enum { MAX_THREADS = 4, BACKGROUND_WORKERS = 3, JOB_QUEUE_CAPACITY = 64 };
+
+typedef struct {
+    minimindo_parallel_task task;
+    void *context;
+    size_t begin;
+    size_t end;
+    atomic_uint *completion;
+} parallel_job;
 
 typedef struct {
     pthread_t thread;
     atomic_uint active;
     atomic_uint stop;
-    atomic_uint epoch;
-    atomic_uint complete;
-    minimindo_parallel_task task;
-    void *context;
-    size_t begin;
-    size_t end;
     unsigned cpu;
 } parallel_worker;
 
 static parallel_worker workers[BACKGROUND_WORKERS];
+static parallel_job job_queue[JOB_QUEUE_CAPACITY];
+static size_t job_read;
+static size_t job_write;
+static atomic_flag job_lock = ATOMIC_FLAG_INIT;
 static pthread_once_t pool_once = PTHREAD_ONCE_INIT;
 static atomic_int pool_ready;
 static _Thread_local unsigned caller_threads = 1U;
@@ -45,6 +51,48 @@ static inline void spin_pause(void)
 #else
     atomic_signal_fence(memory_order_seq_cst);
 #endif
+}
+
+static void queue_lock(void)
+{
+    while (atomic_flag_test_and_set_explicit(&job_lock,
+                                              memory_order_acquire))
+        spin_pause();
+}
+
+static void queue_unlock(void)
+{
+    atomic_flag_clear_explicit(&job_lock, memory_order_release);
+}
+
+static int queue_pop(parallel_job *job)
+{
+    int available = 0;
+    queue_lock();
+    if (job_read != job_write) {
+        *job = job_queue[job_read % JOB_QUEUE_CAPACITY];
+        ++job_read;
+        available = 1;
+    }
+    queue_unlock();
+    return available;
+}
+
+static void queue_push(const parallel_job *jobs, unsigned count)
+{
+    for (;;) {
+        queue_lock();
+        if (job_write - job_read + count <= JOB_QUEUE_CAPACITY) {
+            for (unsigned index = 0; index < count; ++index) {
+                job_queue[job_write % JOB_QUEUE_CAPACITY] = jobs[index];
+                ++job_write;
+            }
+            queue_unlock();
+            return;
+        }
+        queue_unlock();
+        spin_pause();
+    }
 }
 
 static void mailbox_wait(atomic_uint *active)
@@ -89,26 +137,20 @@ static void *worker_main(void *opaque)
 {
     parallel_worker *worker = opaque;
     (void)minimindo_parallel_pin_current(worker->cpu);
-    unsigned observed = 0U;
     for (;;) {
-        while (atomic_load_explicit(&worker->active, memory_order_acquire) == 0U &&
-               atomic_load_explicit(&worker->stop, memory_order_relaxed) == 0U)
-            mailbox_wait(&worker->active);
+        parallel_job job;
+        if (queue_pop(&job)) {
+            job.task(job.context, job.begin, job.end);
+            atomic_fetch_add_explicit(job.completion, 1U,
+                                      memory_order_release);
+            continue;
+        }
         if (atomic_load_explicit(&worker->stop, memory_order_relaxed) != 0U)
             break;
-        while (atomic_load_explicit(&worker->active, memory_order_acquire) != 0U) {
-            const unsigned epoch =
-                atomic_load_explicit(&worker->epoch, memory_order_acquire);
-            if (epoch == observed) {
-                spin_pause();
-                continue;
-            }
-            observed = epoch;
-            minimindo_parallel_task task = worker->task;
-            task(worker->context, worker->begin, worker->end);
-            atomic_store_explicit(&worker->complete, epoch,
-                                  memory_order_release);
-        }
+        if (atomic_load_explicit(&worker->active, memory_order_acquire) == 0U)
+            mailbox_wait(&worker->active);
+        else
+            spin_pause();
     }
     return NULL;
 }
@@ -171,6 +213,7 @@ unsigned minimindo_parallel_threads(void)
 
 int minimindo_parallel_session_begin(unsigned threads)
 {
+    if (session_threads != 0U) return -1;
     minimindo_parallel_set_threads(threads);
     session_threads = 1U;
     if (caller_threads == 1U) return 0;
@@ -178,13 +221,12 @@ int minimindo_parallel_session_begin(unsigned threads)
         caller_threads = 1U;
         return -1;
     }
-    /* Speech assigns the pool to exactly one dispatcher: main during
-     * Thinker/Talker, then Mimi after the producer handoff.  There is no
-     * multi-producer lock because the architecture never creates one. */
+    /* Sessions only keep the requested workers awake. Concurrent dispatchers
+     * share their matrix jobs through the small queue above. */
     session_threads = caller_threads;
     for (unsigned lane = 1U; lane < caller_threads; ++lane) {
         parallel_worker *worker = &workers[lane - 1U];
-        atomic_store_explicit(&worker->active, 1U, memory_order_release);
+        atomic_fetch_add_explicit(&worker->active, 1U, memory_order_release);
         mailbox_wake(&worker->active);
     }
     return 0;
@@ -193,8 +235,8 @@ int minimindo_parallel_session_begin(unsigned threads)
 void minimindo_parallel_session_end(void)
 {
     for (unsigned lane = 1U; lane < session_threads; ++lane)
-        atomic_store_explicit(&workers[lane - 1U].active, 0U,
-                              memory_order_release);
+        atomic_fetch_sub_explicit(&workers[lane - 1U].active, 1U,
+                                  memory_order_release);
     session_threads = 0U;
     caller_threads = 1U;
 }
@@ -209,23 +251,20 @@ void minimindo_parallel_for(size_t count, minimindo_parallel_task task,
         task(context, 0U, count);
         return;
     }
-    unsigned epochs[BACKGROUND_WORKERS] = {0};
+    atomic_uint completion;
+    atomic_init(&completion, 0U);
+    parallel_job jobs[BACKGROUND_WORKERS];
     for (unsigned lane = 1U; lane < threads; ++lane) {
-        parallel_worker *worker = &workers[lane - 1U];
-        worker->task = task;
-        worker->context = context;
-        worker->begin = count * lane / threads;
-        worker->end = count * (lane + 1U) / threads;
-        epochs[lane - 1U] =
-            atomic_fetch_add_explicit(&worker->epoch, 1U,
-                                      memory_order_release) + 1U;
+        parallel_job *job = &jobs[lane - 1U];
+        job->task = task;
+        job->context = context;
+        job->begin = count * lane / threads;
+        job->end = count * (lane + 1U) / threads;
+        job->completion = &completion;
     }
+    queue_push(jobs, threads - 1U);
     task(context, 0U, count / threads);
-    for (unsigned lane = 1U; lane < threads; ++lane) {
-        parallel_worker *worker = &workers[lane - 1U];
-        while (atomic_load_explicit(&worker->complete,
-                                    memory_order_acquire) !=
-               epochs[lane - 1U])
-            spin_pause();
-    }
+    while (atomic_load_explicit(&completion, memory_order_acquire) !=
+           threads - 1U)
+        spin_pause();
 }
