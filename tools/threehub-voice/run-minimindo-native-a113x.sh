@@ -2,7 +2,7 @@
 set -eu
 
 release_repository=${MINIMINDO_RELEASE_REPOSITORY:-baryhuang/llm-in-c}
-release_tag=${MINIMINDO_RELEASE_TAG:-minimindo-native-a113x-v1.3.0}
+release_tag=${MINIMINDO_RELEASE_TAG:-minimindo-native-a113x-v1.4.0}
 model_release_tag=${MINIMINDO_MODEL_RELEASE_TAG:-minimindo-native-a113x-v1.0.0}
 install_dir=${MINIMINDO_INSTALL_DIR:-/dev/shm/minimindo-o-native-v1}
 release_root=${MINIMINDO_RELEASE_ROOT_URL:-https://github.com/$release_repository/releases/download}

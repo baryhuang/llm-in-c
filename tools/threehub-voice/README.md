@@ -66,7 +66,7 @@ after that use the already-running servers. Raw validation measurements are in
 
 `run-minimindo-native-a113x.sh` is the persistent launcher for the separate
 native MiniMind-O service. It pins the executable to GitHub release
-`minimindo-native-a113x-v1.3.0` and the unchanged packed model images to
+`minimindo-native-a113x-v1.4.0` and the unchanged packed model images to
 `minimindo-native-a113x-v1.0.0`. Missing or corrupt files are downloaded to a
 per-process `.part` file, verified by SHA-256, chmodded, and atomically renamed
 before execution. The default live policy is first-sentence completion with a
