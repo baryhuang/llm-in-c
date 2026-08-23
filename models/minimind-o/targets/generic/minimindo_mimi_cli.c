@@ -44,7 +44,7 @@ int main(int argc, char **argv)
 {
     if (argc != 4 && argc != 6) {
         fprintf(stderr,
-                "usage: %s MIMI.mmo CODES.txt OUTPUT.wav [--stream FRAMES]\n",
+                "usage: %s MIMI.mmo CODES.txt OUTPUT.wav [--stream 1]\n",
                 argv[0]);
         return 2;
     }
@@ -52,7 +52,10 @@ int main(int argc, char **argv)
     if (argc == 6) {
         if (strcmp(argv[4], "--stream") != 0) return 2;
         stream_frames = strtoul(argv[5], NULL, 10);
-        if (stream_frames == 0) return 2;
+        if (stream_frames != 1U) {
+            fprintf(stderr, "the stateful streaming decoder requires --stream 1\n");
+            return 2;
+        }
     }
     FILE *input = fopen(argv[2], "r");
     if (input == NULL) { perror(argv[2]); return 3; }
@@ -83,13 +86,23 @@ int main(int argc, char **argv)
             codes[c * frames + t] = frame_major[t * MINIMINDO_MIMI_CODEBOOKS + c];
     free(frame_major);
     char error[256] = {0};
+    unsigned threads = 4U;
+    const char *thread_text = getenv("MINIMINDO_THREADS");
+    if (thread_text != NULL) {
+        const unsigned parsed = (unsigned)strtoul(thread_text, NULL, 10);
+        if (parsed < 1U || parsed > 4U) {
+            fprintf(stderr, "MINIMINDO_THREADS must be in [1,4]\n");
+            return 2;
+        }
+        threads = parsed;
+    }
     minimindo_mimi *model = minimindo_mimi_open(argv[1], (uint32_t)frames, error, sizeof(error));
     if (model == NULL) { fprintf(stderr, "%s\n", error); return 4; }
     const size_t capacity_samples = minimindo_mimi_samples_for_frames(model, frames);
     float *audio = malloc(capacity_samples * sizeof(float)); size_t samples = 0;
     int decode_result = 0;
     (void)minimindo_parallel_pin_current(0U);
-    (void)minimindo_parallel_session_begin(4U);
+    (void)minimindo_parallel_session_begin(threads);
     if (audio == NULL) {
         decode_result = -1;
     } else if (stream_frames == 0) {

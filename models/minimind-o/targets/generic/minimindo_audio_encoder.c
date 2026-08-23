@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <float.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -403,7 +404,7 @@ static int encoder_forward(minimindo_audio_encoder *model,float *sequence,uint32
         matrix_sequence_i8_quantized(&l->k_weight,quantized,scales,length,in,k,f32(&l->k_bias));
         matrix_sequence_i8_quantized(&l->v_weight,quantized,scales,length,in,v,f32(&l->v_bias));
         const float *fw=f32(&l->fsmn);for(uint32_t p=0;p<length;++p)for(uint32_t i=0;i<h;++i){double sum=v[(size_t)p*h+i];for(uint32_t kernel=0;kernel<11;++kernel){int64_t source=(int64_t)p-5+kernel;if(source>=0&&source<length)sum+=v[(size_t)source*h+i]*fw[(size_t)i*11+kernel];}memory[(size_t)p*h+i]=(float)sum;}
-        for(uint32_t query=0;query<length;++query)for(uint32_t head=0;head<heads;++head){double maximum=-INFINITY;double scores[length];
+        for(uint32_t query=0;query<length;++query)for(uint32_t head=0;head<heads;++head){double maximum=-DBL_MAX;double scores[length];
             for(uint32_t source=0;source<length;++source){double score=0;for(uint32_t j=0;j<d;++j)score+=(double)q[(size_t)query*h+head*d+j]*k[(size_t)source*h+head*d+j];scores[source]=score/sqrt((double)d);if(scores[source]>maximum)maximum=scores[source];}
             double denominator=0;for(uint32_t source=0;source<length;++source){scores[source]=exp(scores[source]-maximum);denominator+=scores[source];}
             for(uint32_t j=0;j<d;++j){double sum=0;for(uint32_t source=0;source<length;++source)sum+=scores[source]*v[(size_t)source*h+head*d+j];attention[(size_t)query*h+head*d+j]=(float)(sum/denominator);}}
@@ -475,7 +476,7 @@ static void attention_chunk_heads(void *opaque,size_t begin,size_t end)
         uint32_t head=(uint32_t)(task%HEADS);
         uint32_t sources=c->cached+c->length;
         double scores[AUDIO_CACHE_FRAMES+AUDIO_CHUNK_MAX];
-        double maximum=-INFINITY;
+        double maximum=-DBL_MAX;
         const float *q=c->queries+(size_t)query*AUDIO_HIDDEN+head*HEAD_WIDTH;
         for(uint32_t source=0;source<sources;++source){
             const float *k=(source<c->cached?c->cached_keys+(size_t)source*AUDIO_HIDDEN:

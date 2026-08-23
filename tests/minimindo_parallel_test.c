@@ -19,6 +19,32 @@ static void fill_range(void *opaque, size_t begin, size_t end)
         context->values[index] = context->pass + (unsigned)index;
 }
 
+typedef struct {
+    atomic_int *start;
+    unsigned values[VALUE_COUNT];
+    int failed;
+} concurrent_context;
+
+static void *concurrent_dispatcher(void *opaque)
+{
+    concurrent_context *thread = opaque;
+    minimindo_parallel_set_threads(3U);
+    while (!atomic_load_explicit(thread->start, memory_order_acquire)) {
+    }
+    for (unsigned pass = 1U; pass <= PASSES; ++pass) {
+        fill_context context = {thread->values, pass + 10000U};
+        minimindo_parallel_for(VALUE_COUNT, fill_range, &context);
+        for (size_t index = 0; index < VALUE_COUNT; ++index) {
+            if (thread->values[index] !=
+                pass + 10000U + (unsigned)index) {
+                thread->failed = 1;
+                return NULL;
+            }
+        }
+    }
+    return NULL;
+}
+
 int main(void)
 {
     unsigned values[VALUE_COUNT] = {0};
@@ -37,6 +63,28 @@ int main(void)
             }
         }
     }
+
+    minimindo_parallel_session_end();
+    if (minimindo_parallel_session_begin(3U) != 0) return 1;
+    atomic_int concurrent_start;
+    atomic_init(&concurrent_start, 0);
+    concurrent_context concurrent = {&concurrent_start,{0},0};
+    pthread_t dispatcher;
+    if (pthread_create(&dispatcher,NULL,concurrent_dispatcher,
+                       &concurrent) != 0)
+        return 1;
+    minimindo_parallel_set_threads(3U);
+    atomic_store_explicit(&concurrent_start,1,memory_order_release);
+    for (unsigned pass = 1U; pass <= PASSES; ++pass) {
+        fill_context context = {values, pass + 20000U};
+        minimindo_parallel_for(VALUE_COUNT, fill_range, &context);
+        for (size_t index = 0; index < VALUE_COUNT; ++index) {
+            if (values[index] != pass + 20000U + (unsigned)index)
+                return 1;
+        }
+    }
+    if (pthread_join(dispatcher,NULL) != 0 || concurrent.failed)
+        return 1;
 
     minimindo_parallel_session_end();
     /* Exercise the main->Mimi ownership handoff and a futex wake after idle. */

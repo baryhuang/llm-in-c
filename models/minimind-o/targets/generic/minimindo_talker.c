@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <float.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -20,6 +21,10 @@
 #endif
 
 enum { MMO_VERSION = 1, MMO_HEADER_BYTES = 4096, MMO_F32 = 1, MMO_Q8_ROW = 2 };
+
+#ifndef MINIMINDO_GENERATION_W8A8
+#define MINIMINDO_GENERATION_W8A8 0
+#endif
 
 typedef struct {
     unsigned char magic[8];
@@ -157,32 +162,123 @@ static float q8_f32_dot(const int8_t *weights, const float *input, uint32_t coun
 #endif
 }
 
+#if MINIMINDO_GENERATION_W8A8
+static int32_t q8_i8_dot(const int8_t *weights,const int8_t *input,
+                         uint32_t count)
+{
+#if defined(__aarch64__)
+    int32x4_t sum0=vdupq_n_s32(0),sum1=sum0,sum2=sum0,sum3=sum0;
+    uint32_t index=0;
+    for(;index+64U<=count;index+=64U){
+        const int8x16_t w0=vld1q_s8(weights+index),x0=vld1q_s8(input+index);
+        const int8x16_t w1=vld1q_s8(weights+index+16U),x1=vld1q_s8(input+index+16U);
+        const int8x16_t w2=vld1q_s8(weights+index+32U),x2=vld1q_s8(input+index+32U);
+        const int8x16_t w3=vld1q_s8(weights+index+48U),x3=vld1q_s8(input+index+48U);
+        int16x8_t pair0=vmull_s8(vget_low_s8(w0),vget_low_s8(x0));
+        pair0=vmlal_s8(pair0,vget_low_s8(w1),vget_low_s8(x1));
+        int16x8_t pair1=vmull_s8(vget_high_s8(w0),vget_high_s8(x0));
+        pair1=vmlal_s8(pair1,vget_high_s8(w1),vget_high_s8(x1));
+        int16x8_t pair2=vmull_s8(vget_low_s8(w2),vget_low_s8(x2));
+        pair2=vmlal_s8(pair2,vget_low_s8(w3),vget_low_s8(x3));
+        int16x8_t pair3=vmull_s8(vget_high_s8(w2),vget_high_s8(x2));
+        pair3=vmlal_s8(pair3,vget_high_s8(w3),vget_high_s8(x3));
+        sum0=vpadalq_s16(sum0,pair0);sum1=vpadalq_s16(sum1,pair1);
+        sum2=vpadalq_s16(sum2,pair2);sum3=vpadalq_s16(sum3,pair3);
+    }
+    int32_t sum=vaddvq_s32(vaddq_s32(vaddq_s32(sum0,sum1),vaddq_s32(sum2,sum3)));
+    for(;index<count;++index)sum+=weights[index]*input[index];
+    return sum;
+#else
+    int32_t sum=0;for(uint32_t index=0;index<count;++index)
+        sum+=weights[index]*input[index];return sum;
+#endif
+}
+
+static float quantize_i8(const float *input,int8_t *output,uint32_t count)
+{
+    float maximum=0.0f;
+#if defined(__aarch64__)
+    float32x4_t vmax0=vdupq_n_f32(0),vmax1=vmax0,vmax2=vmax0,vmax3=vmax0;
+    uint32_t index=0;
+    for(;index+16U<=count;index+=16U){
+        vmax0=vmaxq_f32(vmax0,vabsq_f32(vld1q_f32(input+index)));
+        vmax1=vmaxq_f32(vmax1,vabsq_f32(vld1q_f32(input+index+4U)));
+        vmax2=vmaxq_f32(vmax2,vabsq_f32(vld1q_f32(input+index+8U)));
+        vmax3=vmaxq_f32(vmax3,vabsq_f32(vld1q_f32(input+index+12U)));
+    }
+    maximum=vmaxvq_f32(vmaxq_f32(vmaxq_f32(vmax0,vmax1),vmaxq_f32(vmax2,vmax3)));
+    for(;index<count;++index)if(fabsf(input[index])>maximum)maximum=fabsf(input[index]);
+#else
+    for(uint32_t index=0;index<count;++index)if(fabsf(input[index])>maximum)
+        maximum=fabsf(input[index]);
+#endif
+    if(!(maximum>0.0f)){memset(output,0,count);return 0.0f;}
+    const float scale=maximum/127.0f,inverse=1.0f/scale;
+#if defined(__aarch64__)
+    const float32x4_t vinverse=vdupq_n_f32(inverse);uint32_t output_index=0;
+    for(;output_index+16U<=count;output_index+=16U){
+        const int32x4_t q0=vcvtnq_s32_f32(vmulq_f32(vld1q_f32(input+output_index),vinverse));
+        const int32x4_t q1=vcvtnq_s32_f32(vmulq_f32(vld1q_f32(input+output_index+4U),vinverse));
+        const int32x4_t q2=vcvtnq_s32_f32(vmulq_f32(vld1q_f32(input+output_index+8U),vinverse));
+        const int32x4_t q3=vcvtnq_s32_f32(vmulq_f32(vld1q_f32(input+output_index+12U),vinverse));
+        const int16x8_t lo=vcombine_s16(vqmovn_s32(q0),vqmovn_s32(q1));
+        const int16x8_t hi=vcombine_s16(vqmovn_s32(q2),vqmovn_s32(q3));
+        vst1q_s8(output+output_index,vcombine_s8(vqmovn_s16(lo),vqmovn_s16(hi)));
+    }
+    for(;output_index<count;++output_index)
+        output[output_index]=(int8_t)lrintf(input[output_index]*inverse);
+#else
+    for(uint32_t index=0;index<count;++index)
+        output[index]=(int8_t)lrintf(input[index]*inverse);
+#endif
+    return scale;
+}
+#endif
+
 typedef struct {
     const mmo_tensor *tensor;
     const float *input;
     float *output;
     uint32_t length;
+    const int8_t *quantized;
+    float input_scale;
 } q8_parallel_context;
 
 static void q8_matvec_rows(void *opaque, size_t begin, size_t end)
 {
     q8_parallel_context *context = opaque;
     const mmo_tensor *tensor = context->tensor;
+#if MINIMINDO_GENERATION_W8A8
+    const size_t stride = sizeof(float) + tensor->header->cols;
+    for(size_t row=begin;row<end;++row){
+        const unsigned char *record=tensor->data+row*stride;float scale;
+        memcpy(&scale,record,sizeof(scale));
+        context->output[row]=(float)q8_i8_dot(
+            (const int8_t *)(record+sizeof(float)),context->quantized,
+            tensor->header->cols)*scale*context->input_scale;
+    }
+#else
     const size_t stride = sizeof(float) + tensor->header->cols;
     for (size_t row = begin; row < end; ++row) {
         const unsigned char *record = tensor->data + (size_t)row * stride;
-        float scale;
-        memcpy(&scale, record, sizeof(scale));
+        float scale;memcpy(&scale,record,sizeof(scale));
         const int8_t *values=(const int8_t *)(record+sizeof(scale));
         context->output[row] = q8_f32_dot(
             values, context->input, tensor->header->cols) * scale;
     }
+#endif
 }
 
 static void q8_matvec(const mmo_tensor *tensor, const float *input, float *output)
 {
-    q8_parallel_context context = {tensor, input, output, 1U};
-    minimindo_parallel_for(tensor->header->rows, q8_matvec_rows, &context);
+#if MINIMINDO_GENERATION_W8A8
+    int8_t quantized[tensor->header->cols];
+    const float input_scale=quantize_i8(input,quantized,tensor->header->cols);
+    q8_parallel_context context={tensor,input,output,1U,quantized,input_scale};
+#else
+    q8_parallel_context context = {tensor,input,output,1U,NULL,0.0f};
+#endif
+    minimindo_parallel_for(tensor->header->rows,q8_matvec_rows,&context);
 }
 
 static void q8_matmul_rows(void *opaque, size_t begin, size_t end)
@@ -208,7 +304,11 @@ static void q8_matmul_rows(void *opaque, size_t begin, size_t end)
 static void q8_matmul_sequence(const mmo_tensor *tensor, const float *input,
                                uint32_t length, float *output)
 {
-    q8_parallel_context context = {tensor, input, output, length};
+    if (length == 1U) {
+        q8_matvec(tensor,input,output);
+        return;
+    }
+    q8_parallel_context context = {tensor,input,output,length,NULL,0.0f};
     minimindo_parallel_for(tensor->header->rows, q8_matmul_rows, &context);
 }
 
@@ -584,7 +684,7 @@ int minimindo_talker_prefill_sequence(
                 const uint32_t kv_head = head / groups;
                 const float *head_query =
                     query + (size_t)position * h + (size_t)head * d;
-                double maximum = -INFINITY;
+                double maximum = -DBL_MAX;
                 for (uint32_t source = 0; source <= absolute_position; ++source) {
                     const size_t base =
                         ((size_t)layer_index * model->max_context + source) *
@@ -721,7 +821,7 @@ int minimindo_talker_forward_masked(
         for (uint32_t head = 0; head < heads; ++head) {
             const uint32_t kv_head = head / groups;
             const float *query = model->query + (size_t)head * d;
-            double maximum = -INFINITY;
+            double maximum = -DBL_MAX;
             for (uint32_t source = 0; source <= pos; ++source) {
                 const size_t base = ((size_t)layer_index * model->max_context + source) *
                                     kv_size + (size_t)kv_head * d;

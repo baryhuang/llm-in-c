@@ -8,11 +8,10 @@ typedef void (*minimindo_parallel_task)(void *context, size_t begin,
 
 /*
  * A process-wide, persistent three-worker pool. The calling thread is lane 0;
- * workers 1..3 are pinned to CPUs 1..3 on Linux. A session wakes its workers
- * once, and they spin on acquire/release epochs until session_end. Every
- * worker mailbox is SPSC; the speech stage handoff guarantees there is only
- * one dispatcher. This avoids an OpenMP team entry, futex sleep and scheduler
- * wakeup for every matrix.
+ * workers 1..3 are pinned to CPUs 1..3 on Linux. Parallel jobs use one small
+ * shared FIFO; the only spin lock protects enqueue/dequeue. Compute never
+ * holds a lock. Multiple dispatchers may therefore overlap Talker and Mimi
+ * without OpenMP teams or a global inference lock.
  */
 int minimindo_parallel_session_begin(unsigned threads);
 void minimindo_parallel_session_end(void);

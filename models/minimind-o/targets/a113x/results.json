@@ -10,9 +10,10 @@
   "build": {
     "language": "C11",
     "compiler": "GCC 12.2, Debian 12 Linux/AArch64",
-    "flags": "-O3 -march=armv8-a+simd -mtune=cortex-a53 -pthread",
+    "flags": "-Ofast -march=armv8-a+simd -mtune=cortex-a53 -DMINIMINDO_GENERATION_W8A8=1 -DMINIMINDO_ALSA_VOLUME_MONITOR=1 -pthread -lasound",
     "openmp": false,
     "libgomp_linked": false,
+    "libasound_linked": true,
     "python_on_target": false
   },
   "cpu_scaling": {
@@ -140,7 +141,7 @@
     "selected": "four_core_decode_after_generation",
     "reason": "the overlapping decoder created a fifth runnable CPU thread and cost the main model about 644 ms while saving only about 512 ms of Mimi drain"
   },
-  "current_short_fixture": {
+  "historical_short_fixture": {
     "input_audio_ms": 1180,
     "steps": 24,
     "audio_frames": 16,
@@ -157,7 +158,7 @@
       "generate": 244,
       "mimi": 288
     },
-    "thread_observation": "main plus three OpenMP workers run before EOS; after EOS that team sleeps and the Mimi pthread plus its three OpenMP workers run",
+    "thread_observation": "historical OpenMP build; superseded by the persistent pthread shared-FIFO pool",
     "all_four_cores_observed": true,
     "swap_bytes": 0
   },
@@ -191,7 +192,10 @@
     "wav_sha256": "b38714f030bfdcd541767369b314e9a6dd37c8b338e0af7ae9f6366f702d4d1d",
     "outputs_identical": true
   },
-  "real_streaming_acceptance": {
+  "historical_buffered_playback_trace": {
+    "production": false,
+    "accepted": false,
+    "rejection_reason": "first PCM was held until after producer/model end; this is not real end-to-end streaming",
     "workload": "physical USB speaker, 1180 ms fixture, 24 generation steps, 16 Mimi frames",
     "input_audio_ms": 1180,
     "model_end_ms": 6271,
@@ -207,11 +211,136 @@
     "alsa_underruns": 0,
     "event_order_verified": true
   },
+  "continuous_playback_v1_3": {
+    "production": false,
+    "accepted": false,
+    "rejection_reason": "full-response buffering eliminated underruns by violating first-PCM-on-arrival",
+    "artifact_sha256": "8488af31b80cef370f5a1bc03b654142ad69593b423371f335b36ab175c4420b",
+    "mimi_attention_window_positions": 250,
+    "one_frame_stream_api": true,
+    "mimi_eight_frame": {
+      "audio_seconds": 0.64,
+      "wall_seconds": 0.72,
+      "cpu_percent": 318,
+      "peak_rss_kib": 59136,
+      "wav_sha256": "94b17f8a63fc6c7d3a70bc2266649fd87d0b98641ae2bb0261dd2451da01208f"
+    },
+    "mimi_128_frame_full_window": {
+      "audio_seconds": 10.24,
+      "wall_seconds": 10.69,
+      "cpu_percent": 365,
+      "peak_rss_kib": 67712,
+      "wav_sha256": "0a7400c2c4d1990f1879c9bb078359d27c0884a570a2f281ce47137f1c65de40"
+    },
+    "rejected_64_position_window": {
+      "wall_seconds": 9.99,
+      "cpu_percent": 364,
+      "peak_rss_kib": 67584,
+      "wav_sha256": "f6a9118d80a792dfb363a694d3d322ed49db67d88d51ead761749c236261465c",
+      "speedup_percent": 6.5,
+      "reason": "changed long-form PCM for only a 0.70 second gain over 128 frames"
+    },
+    "physical_fixture": {
+      "input_audio_ms": 1180,
+      "input_frames": 20,
+      "prompt_tokens": 37,
+      "steps": 97,
+      "text_steps": 33,
+      "audio_frames": 88,
+      "audio_seconds": 7.04,
+      "audio_encode_ms": 2521,
+      "prefill_ms": 3338,
+      "generate_ms": 8978,
+      "producer_end_ms": 14847,
+      "decode_overlap_frames": 34,
+      "first_audio_ms": 14849,
+      "mimi_decode_end_ms": 19041,
+      "playback_end_ms": 22035,
+      "queue_waits": 0,
+      "queue_wait_ms": 0,
+      "alsa_underruns": 0,
+      "playback_result": 0,
+      "wav_sha256": "5d93af8c8c8bbf38cd0858b3a924906d8a5ad683e00bdbaf520ecd1e4424dac9",
+      "raw_log": "benchmarks/v1.3.0-continuous-playback.log"
+    },
+    "prior_candidate_live_continuity": {
+      "completed_turns": 13,
+      "minimum_audio_frames": 6,
+      "maximum_audio_frames": 114,
+      "alsa_underruns": 0,
+      "note": "same playback policy and kernels with the rejected 64-position quality experiment"
+    }
+  },
+  "real_end_to_end_streaming_v1_4": {
+    "status": "deployed_live_physical_validation_pending",
+    "artifact_sha256": "c86007a11c65c184a30665a6cd403302f12920bf0e46f2e8a9ae47aee5a5e64f",
+    "service_ready_at": "2026-08-22T14:22:11-07:00",
+    "service_pid_at_deploy": 137690,
+    "build": "native C11, AArch64 Cortex-A53 NEON, -Ofast, generation W8A8, pthread; no OpenMP or Python",
+    "hard_invariants": {
+      "input_pcm_processed_while_recording": true,
+      "stable_input_embeddings_prefilled_before_speech_end": true,
+      "talker_code_enters_mimi_on_arrival": true,
+      "first_pcm_frame_enters_alsa_on_arrival": true,
+      "producer_eos_playback_gate": false,
+      "pcm_watermark": false,
+      "complete_response_playback_gate": false
+    },
+    "isolated_mimi_eight_frame": {
+      "audio_seconds": 0.64,
+      "wall_seconds_range": [0.62, 0.69],
+      "pcm_sha256": "94b17f8a63fc6c7d3a70bc2266649fd87d0b98641ae2bb0261dd2451da01208f",
+      "pcm_identical_to_prior_full_window_kernel": true,
+      "optimizations": [
+        "pair two safe int8 products before int32 accumulation",
+        "reuse one activation load across four transposed-convolution phases"
+      ]
+    },
+    "concurrent_fixed_prompt": {
+      "prompt": "hello",
+      "seed": 1,
+      "text": "Hello! How can I assist you today?<|im_end|>",
+      "text_steps": 10,
+      "total_steps": 37,
+      "audio_frames": 28,
+      "audio_seconds": 2.24,
+      "prefill_ms": 912,
+      "generate_ms": 3546,
+      "producer_end_ms": 4592,
+      "model_end_ms": 4655,
+      "decode_overlap_frames": 27,
+      "observed_steady_frame_ms_range": [99, 128],
+      "audio_frame_ms": 80,
+      "sustained_realtime_guaranteed": false,
+      "note": "large 16-step Thinker drain holes are gone; remaining 19-48 ms/frame throughput deficit must not be hidden by buffering"
+    },
+    "threading": {
+      "talker_caller_cpu": 0,
+      "mimi_caller_cpu": 3,
+      "shared_worker_cpus": [1, 2],
+      "post_producer_mimi_cpus": [0, 1, 2, 3],
+      "compute_queue": "bounded shared FIFO",
+      "lock_scope": "enqueue and dequeue only",
+      "compute_lock_count": 0,
+      "concurrent_dispatcher_test_passes_each": 2000,
+      "lost_wakeup_handoff_bug_found_and_fixed": true
+    },
+    "rejected_in_this_increment": {
+      "complete_pcm_before_playback": "violates first-PCM-on-arrival requirement",
+      "pcm_start_watermarks": "violate first-PCM-on-arrival requirement",
+      "fixed_three_plus_one_cpu_partition": "one-core Mimi required 220-310 ms per 80 ms frame",
+      "thinker_drain_batch_16": "created 0.7-0.9 second Talker code gaps",
+      "generation_dot4_output_rows": "slower than independent rows on Cortex-A53",
+      "mimi_transformer_w8a8": "about 1.4% isolated gain with changed PCM"
+    }
+  },
   "production_policy": {
     "stateful_stream_decode": true,
+    "codec_frames_per_decode_call": 1,
+    "mimi_attention_window_positions": 250,
     "decode_overlapped_with_generation": true,
     "decode_starts_after_producer_eos": false,
-    "decode_threads_during_generation": 1,
+    "decode_threads_during_generation": 3,
     "decode_threads_after_generation": 4,
     "generation_threads": 3,
     "simultaneous_model_and_mimi_threads": true,
@@ -219,30 +348,89 @@
     "per_frame_stream_logs": true,
     "direct_raw_pcm_playback": true,
     "wav_required_for_playback": false,
-    "start_buffer_frames": 2,
-    "start_buffer_ms": 160,
+    "playback_waits_for_producer_eos": false,
+    "playback_waits_for_complete_decode": false,
+    "playback_fully_buffered": false,
+    "decoder_to_alsa_streaming": true,
+    "end_to_end_streaming_required": true,
+    "start_buffer_policy": "first_pcm_frame",
+    "start_buffer_frames": 1,
+    "start_buffer_ms": 80,
+    "status_led": {
+      "listening": "green 1 s on / 1 s off (supervisor firmware_updating)",
+      "inference": "yellow 1 s on / 1 s off (supervisor offline)",
+      "playback": "pure blue approximately 0.5 s on / 0.5 s off (supervisor wifi_config_pending)",
+      "playback_transition": "after first 80 ms PCM frame is accepted by ALSA",
+      "publisher": "nonblocking atomic latest-state mailbox",
+      "command_executor": "isolated persistent native-C pthread",
+      "critical_path_waits": 0,
+      "model_or_audio_locks_added": 0
+    },
+    "realtime_volume": {
+      "input_device": "P10S USB HID evdev, vendor 0x1234 product 0x5684",
+      "events": ["KEY_VOLUMEUP", "KEY_VOLUMEDOWN", "KEY_MUTE"],
+      "mixer": "ALSA hw:0 PCM",
+      "step_percent": 2,
+      "works_during_pcm_playback": true,
+      "subprocesses_per_event": 0,
+      "model_or_audio_locks_added": 0,
+      "idle_polling_wakeups": 0,
+      "event_clock": "CLOCK_MONOTONIC via EVIOCSCLOCKID",
+      "event_to_mixer_latency_logged": true,
+      "usb_reconnect_rescan_ms": 1000,
+      "deployed_event_device": "/dev/input/event1",
+      "deployed_thread_name": "volume-event",
+      "integration_test": {
+        "source": "tests/minimindo_volume_integration_test.c",
+        "transport": "native Linux uinput with P10S vendor/product and key capabilities",
+        "volume_raw_sequence": [205, 287, 205],
+        "volume_percent_sequence": [5, 7, 5],
+        "mute_sequence": [false, true, false],
+        "event_to_mixer_latency_ms": [12.340, 14.497, 6.299, 10.185],
+        "minimum_latency_ms": 6.299,
+        "maximum_latency_ms": 14.497,
+        "passed": true,
+        "restored_initial_state": true
+      },
+      "active_pcm_integration_test": {
+        "playback": "real ALSA plughw:0,0 24 kHz S16_LE stream of silence",
+        "events": ["up", "down", "mute", "mute"],
+        "event_to_mixer_latency_ms": [11.595, 19.641, 6.514, 7.639],
+        "minimum_latency_ms": 6.514,
+        "maximum_latency_ms": 19.641,
+        "playback_remained_open_during_updates": true,
+        "passed": true,
+        "restored_initial_state": true
+      }
+    },
     "persistent_pthread_workers": 3,
-    "worker_mailbox": "SPSC atomic epoch",
-    "lock_scope": "empty-queue dequeue wait and enqueue notification only",
+    "worker_mailbox": "bounded shared compute FIFO",
+    "lock_scope": "compute FIFO enqueue/dequeue spin lock; data-queue empty-wait notification only",
     "model_state_mutexes": 0,
     "compute_mutexes": 0,
     "max_live_input_ms": 3000,
-    "max_generation_steps": 64,
+    "first_sentence_text_stop": true,
+    "max_generation_steps": 32,
     "audio_drain_steps": 192,
+    "thinker_drain_chunk_positions": 1,
+    "audio_drain_ends_at_first_invalid_complete_frame": true,
     "mic_capture_gain_db": 8,
     "pcm_playback_percent": 5,
     "pcm_zero_value_silent_despite_alsa_zero_db_metadata": true,
-    "reason": "Talker-to-Mimi-to-ALSA streaming is mandatory; Mimi remains slower than the 12.5 frame/s consumer and reports queue waits instead of switching to a buffered mode"
+    "reason": "input tokens, Talker codes, Mimi PCM, and ALSA delivery are one mandatory end-to-end stream; underruns must be fixed by sustained codec throughput rather than buffering"
   },
   "rejected_native_c_experiments": {
     "mimi_f32_preexpanded_convolution_weights": "1.49-1.52 s versus 1.22-1.26 s and about 58 MiB more RSS",
     "mimi_q8_activation_block16": "1.24 s with no stable speed gain and changed output peak",
     "mimi_shared_activation_q8_dot2": "1.76 s versus about 1.25 s",
     "sensevoice_single_position_q8": "2.52-2.62 s versus 2.31-2.44 s for four-position Q8",
-    "openmp_three_generation_threads_plus_one_mimi_thread": "byte-identical 44-frame WAV and 9 frames decoded before EOS, but repeated OpenMP team scheduling increased generation from 4.233 s to 8.161 s and total model time from 12.609 s to 15.258 s; superseded by the persistent SPSC pool",
+    "mimi_64_position_attention_window": "9.99 s versus 10.69 s for 128 frames, but changed long-form PCM; production retains the checkpoint's 250-position window",
+    "mimi_ofast": "no repeatable speed win over -O3 and changed PCM",
+    "openmp_three_generation_threads_plus_one_mimi_thread": "byte-identical 44-frame WAV and 9 frames decoded before EOS, but repeated OpenMP team scheduling increased generation from 4.233 s to 8.161 s and total model time from 12.609 s to 15.258 s; superseded by the persistent shared-FIFO pool",
     "mimi_four_frame_microbatch": "byte-identical 44-frame WAV and 12 frames decoded before EOS, but wall time increased from 16.92 s to 20.43 s and producer time from 9.114 s to 10.902 s"
   },
-  "always_streaming_trace": {
+  "historical_fixed_partition_trace": {
+    "production": false,
     "workload": "fixed Chinese prompt, seed 20260822, 44 output frames",
     "talker_first_frame_ms": 2087,
     "mimi_first_frame_ms": 2844,
@@ -251,11 +439,12 @@
     "model_end_ms": 14943,
     "decode_overlapped_with_generation": true,
     "end_to_end_streaming": false,
-    "reason_end_to_end_false": "Mimi produces PCM below the 12.5 frame/s playback rate, so ALSA requires a continuity buffer"
+    "reason_end_to_end_false": "historical build did not deliver PCM on first arrival; buffering was later rejected as a product-policy violation"
   },
   "complete_response_correction": {
     "problem": "24 generation steps jointly truncated text and staggered audio to 16 Mimi frames / 1.28 seconds",
-    "production_max_text_steps": 64,
+    "production_max_text_steps": 32,
+    "production_first_sentence_stop": true,
     "maximum_audio_drain_steps": 192,
     "fixed_seed_prompt": "请用一句简短的话介绍你自己。",
     "natural_text_eos_step": 10,
@@ -349,9 +538,13 @@
     "volatile_across_reboot": true,
     "root_filesystem_free_mib": 138,
     "model_artifacts_mib": 377,
-    "binary_release_tag": "minimindo-native-a113x-v1.2.0",
+    "binary_release_tag": "minimindo-native-a113x-v1.6.0",
+    "binary_sha256": "e0f881c70a1881669b2d3e36d6a936daa165cc01cd6dcd572c850b7d1e455c5e",
+    "runner_required_binary_sha256": "e0f881c70a1881669b2d3e36d6a936daa165cc01cd6dcd572c850b7d1e455c5e",
+    "runner_required_binary_release_pending_physical_acceptance": false,
     "model_release_tag": "minimindo-native-a113x-v1.0.0",
-    "release_contains_all_required_artifacts": true,
+    "model_release_contains_all_required_model_artifacts": true,
+    "binary_release_contains_current_runner_artifact": true,
     "persistent_runner": "/usr/local/bin/run-minimindo-native-a113x.sh",
     "sha256_pinned_in_runner": true,
     "partial_download_atomic_rename": true,

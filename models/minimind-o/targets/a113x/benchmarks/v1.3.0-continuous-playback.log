@@ -1,0 +1,283 @@
+EVENT input_stream_start turn=0 prefix_tokens=4
+STREAM stage=input_audio_commit turn=0 frames=8 total_frames=8 pcm_ms=480 elapsed_ms=1535
+STREAM stage=input_prefill turn=0 positions=8 thinker_position=12 talker_position=12 elapsed_ms=2542
+STREAM stage=input_audio_commit turn=0 frames=12 total_frames=20 pcm_ms=1200 elapsed_ms=3719
+STREAM stage=input_prefill turn=0 positions=12 thinker_position=24 talker_position=24 elapsed_ms=5156
+EVENT input_stream_eos turn=0 input_frames=20 prompt_tokens=37 thinker_position=37 talker_position=37 elapsed_ms=5866
+EVENT input_ready turn=0 input_frames=20 prompt_tokens=37 speech_start_to_ready_ms=5869
+THREAD stage=mimi_start turn=0 tid=109955 cpu=3 affinity=3 threads=1
+STREAM stage=talker_produce turn=0 frame=1 elapsed_ms=6497
+STREAM stage=talker_produce turn=0 frame=2 elapsed_ms=6576
+STREAM stage=talker_produce turn=0 frame=3 elapsed_ms=6654
+STREAM stage=talker_produce turn=0 frame=4 elapsed_ms=6735
+STREAM stage=mimi_decode turn=0 frame=1 queued=4 producer_done=0 frame_ms=308.6 frame_cpu_ms=1113.6 rtf=3.857 elapsed_ms=6806
+STREAM stage=talker_produce turn=0 frame=5 elapsed_ms=6821
+STREAM stage=talker_produce turn=0 frame=6 elapsed_ms=6903
+STREAM stage=talker_produce turn=0 frame=7 elapsed_ms=6977
+STREAM stage=talker_produce turn=0 frame=8 elapsed_ms=7054
+STREAM stage=mimi_decode turn=0 frame=2 queued=8 producer_done=0 frame_ms=253.6 frame_cpu_ms=950.2 rtf=3.170 elapsed_ms=7059
+STREAM stage=talker_produce turn=0 frame=9 elapsed_ms=7133
+STREAM stage=talker_produce turn=0 frame=10 elapsed_ms=7208
+STREAM stage=talker_produce turn=0 frame=11 elapsed_ms=7294
+STREAM stage=mimi_decode turn=0 frame=3 queued=11 producer_done=0 frame_ms=257.8 frame_cpu_ms=956.0 rtf=3.222 elapsed_ms=7317
+STREAM stage=talker_produce turn=0 frame=12 elapsed_ms=7370
+STREAM stage=talker_produce turn=0 frame=13 elapsed_ms=7446
+STREAM stage=talker_produce turn=0 frame=14 elapsed_ms=7533
+STREAM stage=mimi_decode turn=0 frame=4 queued=14 producer_done=0 frame_ms=236.4 frame_cpu_ms=907.8 rtf=2.955 elapsed_ms=7554
+STREAM stage=talker_produce turn=0 frame=15 elapsed_ms=7612
+STREAM stage=talker_produce turn=0 frame=16 elapsed_ms=7698
+STREAM stage=talker_produce turn=0 frame=17 elapsed_ms=7785
+STREAM stage=mimi_decode turn=0 frame=5 queued=17 producer_done=0 frame_ms=243.9 frame_cpu_ms=908.9 rtf=3.049 elapsed_ms=7798
+STREAM stage=talker_produce turn=0 frame=18 elapsed_ms=7889
+STREAM stage=talker_produce turn=0 frame=19 elapsed_ms=7977
+STREAM stage=mimi_decode turn=0 frame=6 queued=19 producer_done=0 frame_ms=246.3 frame_cpu_ms=893.6 rtf=3.079 elapsed_ms=8044
+STREAM stage=talker_produce turn=0 frame=20 elapsed_ms=8058
+STREAM stage=talker_produce turn=0 frame=21 elapsed_ms=8144
+STREAM stage=talker_produce turn=0 frame=22 elapsed_ms=8244
+STREAM stage=mimi_decode turn=0 frame=7 queued=22 producer_done=0 frame_ms=232.5 frame_cpu_ms=868.3 rtf=2.907 elapsed_ms=8277
+STREAM stage=talker_produce turn=0 frame=23 elapsed_ms=8338
+STREAM stage=talker_produce turn=0 frame=24 elapsed_ms=8423
+STREAM stage=talker_produce turn=0 frame=25 elapsed_ms=8510
+STREAM stage=mimi_decode turn=0 frame=8 queued=25 producer_done=0 frame_ms=235.7 frame_cpu_ms=873.9 rtf=2.946 elapsed_ms=8513
+STREAM stage=talker_produce turn=0 frame=26 elapsed_ms=8607
+STREAM stage=mimi_decode turn=0 frame=9 queued=26 producer_done=0 frame_ms=225.5 frame_cpu_ms=842.5 rtf=2.818 elapsed_ms=8738
+STREAM stage=mimi_decode turn=0 frame=10 queued=26 producer_done=0 frame_ms=235.7 frame_cpu_ms=865.4 rtf=2.947 elapsed_ms=8974
+STREAM stage=mimi_decode turn=0 frame=11 queued=26 producer_done=0 frame_ms=224.2 frame_cpu_ms=849.2 rtf=2.803 elapsed_ms=9198
+STREAM stage=thinker_drain_prefill turn=0 positions=16 elapsed_ms=9406
+STREAM stage=mimi_decode turn=0 frame=12 queued=26 producer_done=0 frame_ms=233.6 frame_cpu_ms=864.3 rtf=2.920 elapsed_ms=9432
+STREAM stage=talker_produce turn=0 frame=27 elapsed_ms=9442
+STREAM stage=talker_produce turn=0 frame=28 elapsed_ms=9472
+STREAM stage=talker_produce turn=0 frame=29 elapsed_ms=9509
+STREAM stage=talker_produce turn=0 frame=30 elapsed_ms=9540
+STREAM stage=talker_produce turn=0 frame=31 elapsed_ms=9570
+STREAM stage=talker_produce turn=0 frame=32 elapsed_ms=9601
+STREAM stage=talker_produce turn=0 frame=33 elapsed_ms=9636
+STREAM stage=mimi_decode turn=0 frame=13 queued=33 producer_done=0 frame_ms=243.8 frame_cpu_ms=904.1 rtf=3.047 elapsed_ms=9676
+STREAM stage=talker_produce turn=0 frame=34 elapsed_ms=9693
+STREAM stage=talker_produce turn=0 frame=35 elapsed_ms=9746
+STREAM stage=talker_produce turn=0 frame=36 elapsed_ms=9816
+STREAM stage=talker_produce turn=0 frame=37 elapsed_ms=9856
+STREAM stage=talker_produce turn=0 frame=38 elapsed_ms=9892
+STREAM stage=talker_produce turn=0 frame=39 elapsed_ms=9933
+STREAM stage=mimi_decode turn=0 frame=14 queued=39 producer_done=0 frame_ms=269.7 frame_cpu_ms=915.6 rtf=3.371 elapsed_ms=9946
+STREAM stage=talker_produce turn=0 frame=40 elapsed_ms=9965
+STREAM stage=talker_produce turn=0 frame=41 elapsed_ms=10007
+STREAM stage=talker_produce turn=0 frame=42 elapsed_ms=10042
+STREAM stage=mimi_decode turn=0 frame=15 queued=42 producer_done=0 frame_ms=245.8 frame_cpu_ms=885.3 rtf=3.072 elapsed_ms=10191
+STREAM stage=mimi_decode turn=0 frame=16 queued=42 producer_done=0 frame_ms=217.9 frame_cpu_ms=816.7 rtf=2.724 elapsed_ms=10410
+STREAM stage=mimi_decode turn=0 frame=17 queued=42 producer_done=0 frame_ms=239.5 frame_cpu_ms=878.4 rtf=2.994 elapsed_ms=10649
+STREAM stage=mimi_decode turn=0 frame=18 queued=42 producer_done=0 frame_ms=247.0 frame_cpu_ms=919.9 rtf=3.088 elapsed_ms=10896
+STREAM stage=thinker_drain_prefill turn=0 positions=16 elapsed_ms=10916
+STREAM stage=talker_produce turn=0 frame=43 elapsed_ms=10948
+STREAM stage=talker_produce turn=0 frame=44 elapsed_ms=10984
+STREAM stage=talker_produce turn=0 frame=45 elapsed_ms=11019
+STREAM stage=talker_produce turn=0 frame=46 elapsed_ms=11052
+STREAM stage=talker_produce turn=0 frame=47 elapsed_ms=11098
+STREAM stage=talker_produce turn=0 frame=48 elapsed_ms=11137
+STREAM stage=mimi_decode turn=0 frame=19 queued=48 producer_done=0 frame_ms=256.8 frame_cpu_ms=947.3 rtf=3.211 elapsed_ms=11153
+STREAM stage=talker_produce turn=0 frame=49 elapsed_ms=11170
+STREAM stage=talker_produce turn=0 frame=50 elapsed_ms=11219
+STREAM stage=talker_produce turn=0 frame=51 elapsed_ms=11253
+STREAM stage=talker_produce turn=0 frame=52 elapsed_ms=11287
+STREAM stage=talker_produce turn=0 frame=53 elapsed_ms=11328
+STREAM stage=talker_produce turn=0 frame=54 elapsed_ms=11362
+STREAM stage=talker_produce turn=0 frame=55 elapsed_ms=11396
+STREAM stage=mimi_decode turn=0 frame=20 queued=55 producer_done=0 frame_ms=251.4 frame_cpu_ms=938.3 rtf=3.143 elapsed_ms=11405
+STREAM stage=talker_produce turn=0 frame=56 elapsed_ms=11445
+STREAM stage=talker_produce turn=0 frame=57 elapsed_ms=11482
+STREAM stage=talker_produce turn=0 frame=58 elapsed_ms=11516
+STREAM stage=mimi_decode turn=0 frame=21 queued=58 producer_done=0 frame_ms=228.0 frame_cpu_ms=860.0 rtf=2.851 elapsed_ms=11633
+STREAM stage=mimi_decode turn=0 frame=22 queued=58 producer_done=0 frame_ms=220.3 frame_cpu_ms=815.8 rtf=2.754 elapsed_ms=11853
+STREAM stage=mimi_decode turn=0 frame=23 queued=58 producer_done=0 frame_ms=220.2 frame_cpu_ms=821.6 rtf=2.753 elapsed_ms=12074
+STREAM stage=mimi_decode turn=0 frame=24 queued=58 producer_done=0 frame_ms=223.6 frame_cpu_ms=831.4 rtf=2.794 elapsed_ms=12298
+STREAM stage=thinker_drain_prefill turn=0 positions=16 elapsed_ms=12469
+STREAM stage=talker_produce turn=0 frame=59 elapsed_ms=12509
+STREAM stage=mimi_decode turn=0 frame=25 queued=59 producer_done=0 frame_ms=226.9 frame_cpu_ms=838.3 rtf=2.836 elapsed_ms=12525
+STREAM stage=talker_produce turn=0 frame=60 elapsed_ms=12560
+STREAM stage=talker_produce turn=0 frame=61 elapsed_ms=12594
+STREAM stage=talker_produce turn=0 frame=62 elapsed_ms=12637
+STREAM stage=talker_produce turn=0 frame=63 elapsed_ms=12685
+STREAM stage=talker_produce turn=0 frame=64 elapsed_ms=12720
+STREAM stage=mimi_decode turn=0 frame=26 queued=64 producer_done=0 frame_ms=235.2 frame_cpu_ms=857.5 rtf=2.939 elapsed_ms=12760
+STREAM stage=talker_produce turn=0 frame=65 elapsed_ms=12764
+STREAM stage=talker_produce turn=0 frame=66 elapsed_ms=12806
+STREAM stage=talker_produce turn=0 frame=67 elapsed_ms=12843
+STREAM stage=talker_produce turn=0 frame=68 elapsed_ms=12886
+STREAM stage=talker_produce turn=0 frame=69 elapsed_ms=12923
+STREAM stage=talker_produce turn=0 frame=70 elapsed_ms=12960
+STREAM stage=talker_produce turn=0 frame=71 elapsed_ms=12996
+STREAM stage=mimi_decode turn=0 frame=27 queued=71 producer_done=0 frame_ms=236.1 frame_cpu_ms=901.8 rtf=2.951 elapsed_ms=12996
+STREAM stage=talker_produce turn=0 frame=72 elapsed_ms=13038
+STREAM stage=talker_produce turn=0 frame=73 elapsed_ms=13074
+STREAM stage=talker_produce turn=0 frame=74 elapsed_ms=13116
+STREAM stage=mimi_decode turn=0 frame=28 queued=74 producer_done=0 frame_ms=229.6 frame_cpu_ms=866.5 rtf=2.871 elapsed_ms=13226
+STREAM stage=mimi_decode turn=0 frame=29 queued=74 producer_done=0 frame_ms=225.1 frame_cpu_ms=817.6 rtf=2.814 elapsed_ms=13451
+STREAM stage=mimi_decode turn=0 frame=30 queued=74 producer_done=0 frame_ms=229.3 frame_cpu_ms=845.7 rtf=2.866 elapsed_ms=13681
+STREAM stage=mimi_decode turn=0 frame=31 queued=74 producer_done=0 frame_ms=228.4 frame_cpu_ms=841.4 rtf=2.855 elapsed_ms=13909
+STREAM stage=mimi_decode turn=0 frame=32 queued=74 producer_done=0 frame_ms=226.4 frame_cpu_ms=851.8 rtf=2.830 elapsed_ms=14136
+STREAM stage=thinker_drain_prefill turn=0 positions=16 elapsed_ms=14170
+STREAM stage=talker_produce turn=0 frame=75 elapsed_ms=14211
+STREAM stage=talker_produce turn=0 frame=76 elapsed_ms=14258
+STREAM stage=talker_produce turn=0 frame=77 elapsed_ms=14301
+STREAM stage=talker_produce turn=0 frame=78 elapsed_ms=14356
+STREAM stage=mimi_decode turn=0 frame=33 queued=78 producer_done=0 frame_ms=238.7 frame_cpu_ms=877.7 rtf=2.984 elapsed_ms=14374
+STREAM stage=talker_produce turn=0 frame=79 elapsed_ms=14393
+STREAM stage=talker_produce turn=0 frame=80 elapsed_ms=14448
+STREAM stage=talker_produce turn=0 frame=81 elapsed_ms=14496
+STREAM stage=talker_produce turn=0 frame=82 elapsed_ms=14535
+STREAM stage=talker_produce turn=0 frame=83 elapsed_ms=14575
+STREAM stage=talker_produce turn=0 frame=84 elapsed_ms=14613
+STREAM stage=mimi_decode turn=0 frame=34 queued=84 producer_done=0 frame_ms=240.2 frame_cpu_ms=899.1 rtf=3.002 elapsed_ms=14615
+STREAM stage=talker_produce turn=0 frame=85 elapsed_ms=14650
+STREAM stage=talker_produce turn=0 frame=86 elapsed_ms=14713
+STREAM stage=talker_produce turn=0 frame=87 elapsed_ms=14749
+STREAM stage=talker_produce turn=0 frame=88 elapsed_ms=14792
+STREAM stage=mimi_decode turn=0 frame=35 queued=88 producer_done=1 frame_ms=233.3 frame_cpu_ms=836.2 rtf=2.916 elapsed_ms=14848
+STREAM stage=alsa_write turn=0 frame=1 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+EVENT first_audio turn=0 elapsed_ms=14849 buffered_frames=34 target_frames=8 buffered_ms=2720
+STREAM stage=alsa_write turn=0 frame=2 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=3 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=4 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=5 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=6 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=7 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=8 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=9 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=10 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=11 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=12 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=13 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=14 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=15 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=alsa_write turn=0 frame=16 decoded=35 queued=88 producer_done=1 elapsed_ms=14849
+STREAM stage=talker_done turn=0 frames=88 decoded=34 elapsed_ms=14852
+EVENT model_end turn=0 elapsed_ms=14847
+THREAD stage=mimi_drain turn=0 tid=109955 cpu=0 affinity=0 threads=4
+STREAM stage=alsa_write turn=0 frame=17 decoded=35 queued=88 producer_done=1 elapsed_ms=14903
+STREAM stage=alsa_write turn=0 frame=18 decoded=35 queued=88 producer_done=1 elapsed_ms=14904
+STREAM stage=alsa_write turn=0 frame=19 decoded=35 queued=88 producer_done=1 elapsed_ms=14904
+STREAM stage=alsa_write turn=0 frame=20 decoded=35 queued=88 producer_done=1 elapsed_ms=14907
+STREAM stage=alsa_write turn=0 frame=21 decoded=35 queued=88 producer_done=1 elapsed_ms=14907
+STREAM stage=alsa_write turn=0 frame=22 decoded=35 queued=88 producer_done=1 elapsed_ms=14907
+STREAM stage=alsa_write turn=0 frame=23 decoded=35 queued=88 producer_done=1 elapsed_ms=14907
+STREAM stage=mimi_decode turn=0 frame=36 queued=88 producer_done=1 frame_ms=105.1 frame_cpu_ms=351.2 rtf=1.314 elapsed_ms=14957
+STREAM stage=alsa_write turn=0 frame=24 decoded=36 queued=88 producer_done=1 elapsed_ms=15018
+STREAM stage=alsa_write turn=0 frame=25 decoded=36 queued=88 producer_done=1 elapsed_ms=15018
+STREAM stage=mimi_decode turn=0 frame=37 queued=88 producer_done=1 frame_ms=82.4 frame_cpu_ms=302.9 rtf=1.030 elapsed_ms=15039
+STREAM stage=mimi_decode turn=0 frame=38 queued=88 producer_done=1 frame_ms=77.8 frame_cpu_ms=283.2 rtf=0.973 elapsed_ms=15117
+STREAM stage=alsa_write turn=0 frame=26 decoded=38 queued=88 producer_done=1 elapsed_ms=15140
+STREAM stage=mimi_decode turn=0 frame=39 queued=88 producer_done=1 frame_ms=89.2 frame_cpu_ms=327.9 rtf=1.115 elapsed_ms=15207
+STREAM stage=alsa_write turn=0 frame=27 decoded=39 queued=88 producer_done=1 elapsed_ms=15264
+STREAM stage=alsa_write turn=0 frame=28 decoded=39 queued=88 producer_done=1 elapsed_ms=15265
+STREAM stage=mimi_decode turn=0 frame=40 queued=88 producer_done=1 frame_ms=71.4 frame_cpu_ms=274.2 rtf=0.892 elapsed_ms=15278
+STREAM stage=mimi_decode turn=0 frame=41 queued=88 producer_done=1 frame_ms=71.0 frame_cpu_ms=263.1 rtf=0.888 elapsed_ms=15349
+STREAM stage=alsa_write turn=0 frame=29 decoded=41 queued=88 producer_done=1 elapsed_ms=15389
+STREAM stage=alsa_write turn=0 frame=30 decoded=41 queued=88 producer_done=1 elapsed_ms=15390
+STREAM stage=mimi_decode turn=0 frame=42 queued=88 producer_done=1 frame_ms=77.5 frame_cpu_ms=297.7 rtf=0.969 elapsed_ms=15427
+STREAM stage=mimi_decode turn=0 frame=43 queued=88 producer_done=1 frame_ms=66.2 frame_cpu_ms=251.7 rtf=0.827 elapsed_ms=15493
+STREAM stage=alsa_write turn=0 frame=31 decoded=43 queued=88 producer_done=1 elapsed_ms=15514
+STREAM stage=mimi_decode turn=0 frame=44 queued=88 producer_done=1 frame_ms=76.8 frame_cpu_ms=298.5 rtf=0.960 elapsed_ms=15570
+STREAM stage=alsa_write turn=0 frame=32 decoded=44 queued=88 producer_done=1 elapsed_ms=15640
+STREAM stage=alsa_write turn=0 frame=33 decoded=44 queued=88 producer_done=1 elapsed_ms=15640
+STREAM stage=mimi_decode turn=0 frame=45 queued=88 producer_done=1 frame_ms=74.0 frame_cpu_ms=276.2 rtf=0.925 elapsed_ms=15644
+STREAM stage=mimi_decode turn=0 frame=46 queued=88 producer_done=1 frame_ms=67.2 frame_cpu_ms=261.8 rtf=0.840 elapsed_ms=15711
+STREAM stage=alsa_write turn=0 frame=34 decoded=46 queued=88 producer_done=1 elapsed_ms=15765
+STREAM stage=mimi_decode turn=0 frame=47 queued=88 producer_done=1 frame_ms=94.2 frame_cpu_ms=341.5 rtf=1.177 elapsed_ms=15806
+STREAM stage=mimi_decode turn=0 frame=48 queued=88 producer_done=1 frame_ms=76.8 frame_cpu_ms=286.6 rtf=0.960 elapsed_ms=15883
+STREAM stage=alsa_write turn=0 frame=35 decoded=48 queued=88 producer_done=1 elapsed_ms=15890
+STREAM stage=alsa_write turn=0 frame=36 decoded=48 queued=88 producer_done=1 elapsed_ms=15890
+STREAM stage=mimi_decode turn=0 frame=49 queued=88 producer_done=1 frame_ms=72.3 frame_cpu_ms=276.2 rtf=0.904 elapsed_ms=15955
+STREAM stage=alsa_write turn=0 frame=37 decoded=49 queued=88 producer_done=1 elapsed_ms=16014
+STREAM stage=mimi_decode turn=0 frame=50 queued=88 producer_done=1 frame_ms=70.4 frame_cpu_ms=261.9 rtf=0.879 elapsed_ms=16025
+STREAM stage=mimi_decode turn=0 frame=51 queued=88 producer_done=1 frame_ms=71.3 frame_cpu_ms=263.5 rtf=0.891 elapsed_ms=16097
+STREAM stage=alsa_write turn=0 frame=38 decoded=51 queued=88 producer_done=1 elapsed_ms=16140
+STREAM stage=alsa_write turn=0 frame=39 decoded=51 queued=88 producer_done=1 elapsed_ms=16140
+STREAM stage=mimi_decode turn=0 frame=52 queued=88 producer_done=1 frame_ms=81.9 frame_cpu_ms=300.0 rtf=1.023 elapsed_ms=16179
+STREAM stage=alsa_write turn=0 frame=40 decoded=52 queued=88 producer_done=1 elapsed_ms=16265
+STREAM stage=alsa_write turn=0 frame=41 decoded=52 queued=88 producer_done=1 elapsed_ms=16265
+STREAM stage=mimi_decode turn=0 frame=53 queued=88 producer_done=1 frame_ms=87.4 frame_cpu_ms=315.7 rtf=1.093 elapsed_ms=16267
+STREAM stage=mimi_decode turn=0 frame=54 queued=88 producer_done=1 frame_ms=67.4 frame_cpu_ms=265.6 rtf=0.842 elapsed_ms=16334
+STREAM stage=alsa_write turn=0 frame=42 decoded=54 queued=88 producer_done=1 elapsed_ms=16390
+STREAM stage=mimi_decode turn=0 frame=55 queued=88 producer_done=1 frame_ms=87.9 frame_cpu_ms=314.4 rtf=1.099 elapsed_ms=16422
+STREAM stage=mimi_decode turn=0 frame=56 queued=88 producer_done=1 frame_ms=77.9 frame_cpu_ms=287.3 rtf=0.974 elapsed_ms=16500
+STREAM stage=alsa_write turn=0 frame=43 decoded=56 queued=88 producer_done=1 elapsed_ms=16515
+STREAM stage=alsa_write turn=0 frame=44 decoded=56 queued=88 producer_done=1 elapsed_ms=16515
+STREAM stage=mimi_decode turn=0 frame=57 queued=88 producer_done=1 frame_ms=69.1 frame_cpu_ms=264.0 rtf=0.863 elapsed_ms=16569
+STREAM stage=alsa_write turn=0 frame=45 decoded=57 queued=88 producer_done=1 elapsed_ms=16642
+STREAM stage=mimi_decode turn=0 frame=58 queued=88 producer_done=1 frame_ms=79.3 frame_cpu_ms=295.7 rtf=0.992 elapsed_ms=16649
+STREAM stage=mimi_decode turn=0 frame=59 queued=88 producer_done=1 frame_ms=75.9 frame_cpu_ms=286.2 rtf=0.949 elapsed_ms=16725
+STREAM stage=alsa_write turn=0 frame=46 decoded=59 queued=88 producer_done=1 elapsed_ms=16765
+STREAM stage=alsa_write turn=0 frame=47 decoded=59 queued=88 producer_done=1 elapsed_ms=16765
+STREAM stage=mimi_decode turn=0 frame=60 queued=88 producer_done=1 frame_ms=73.0 frame_cpu_ms=290.3 rtf=0.912 elapsed_ms=16798
+STREAM stage=mimi_decode turn=0 frame=61 queued=88 producer_done=1 frame_ms=79.4 frame_cpu_ms=286.7 rtf=0.993 elapsed_ms=16877
+STREAM stage=alsa_write turn=0 frame=48 decoded=61 queued=88 producer_done=1 elapsed_ms=16890
+STREAM stage=mimi_decode turn=0 frame=62 queued=88 producer_done=1 frame_ms=79.7 frame_cpu_ms=298.2 rtf=0.996 elapsed_ms=16957
+STREAM stage=alsa_write turn=0 frame=49 decoded=62 queued=88 producer_done=1 elapsed_ms=17015
+STREAM stage=alsa_write turn=0 frame=50 decoded=62 queued=88 producer_done=1 elapsed_ms=17015
+STREAM stage=mimi_decode turn=0 frame=63 queued=88 producer_done=1 frame_ms=73.5 frame_cpu_ms=288.6 rtf=0.919 elapsed_ms=17031
+STREAM stage=mimi_decode turn=0 frame=64 queued=88 producer_done=1 frame_ms=80.8 frame_cpu_ms=300.3 rtf=1.010 elapsed_ms=17111
+STREAM stage=alsa_write turn=0 frame=51 decoded=64 queued=88 producer_done=1 elapsed_ms=17140
+STREAM stage=mimi_decode turn=0 frame=65 queued=88 producer_done=1 frame_ms=78.6 frame_cpu_ms=301.3 rtf=0.982 elapsed_ms=17190
+STREAM stage=alsa_write turn=0 frame=52 decoded=65 queued=88 producer_done=1 elapsed_ms=17265
+STREAM stage=alsa_write turn=0 frame=53 decoded=65 queued=88 producer_done=1 elapsed_ms=17265
+STREAM stage=mimi_decode turn=0 frame=66 queued=88 producer_done=1 frame_ms=82.3 frame_cpu_ms=301.0 rtf=1.028 elapsed_ms=17273
+STREAM stage=mimi_decode turn=0 frame=67 queued=88 producer_done=1 frame_ms=88.6 frame_cpu_ms=320.7 rtf=1.107 elapsed_ms=17361
+STREAM stage=alsa_write turn=0 frame=54 decoded=67 queued=88 producer_done=1 elapsed_ms=17390
+STREAM stage=alsa_write turn=0 frame=55 decoded=67 queued=88 producer_done=1 elapsed_ms=17390
+STREAM stage=mimi_decode turn=0 frame=68 queued=88 producer_done=1 frame_ms=71.4 frame_cpu_ms=282.7 rtf=0.892 elapsed_ms=17433
+STREAM stage=mimi_decode turn=0 frame=69 queued=88 producer_done=1 frame_ms=70.0 frame_cpu_ms=277.9 rtf=0.875 elapsed_ms=17503
+STREAM stage=alsa_write turn=0 frame=56 decoded=69 queued=88 producer_done=1 elapsed_ms=17515
+STREAM stage=mimi_decode turn=0 frame=70 queued=88 producer_done=1 frame_ms=91.4 frame_cpu_ms=333.3 rtf=1.142 elapsed_ms=17594
+STREAM stage=alsa_write turn=0 frame=57 decoded=70 queued=88 producer_done=1 elapsed_ms=17640
+STREAM stage=alsa_write turn=0 frame=58 decoded=70 queued=88 producer_done=1 elapsed_ms=17640
+STREAM stage=mimi_decode turn=0 frame=71 queued=88 producer_done=1 frame_ms=71.0 frame_cpu_ms=268.6 rtf=0.888 elapsed_ms=17665
+STREAM stage=mimi_decode turn=0 frame=72 queued=88 producer_done=1 frame_ms=77.5 frame_cpu_ms=289.0 rtf=0.969 elapsed_ms=17743
+STREAM stage=alsa_write turn=0 frame=59 decoded=72 queued=88 producer_done=1 elapsed_ms=17765
+STREAM stage=mimi_decode turn=0 frame=73 queued=88 producer_done=1 frame_ms=79.6 frame_cpu_ms=302.5 rtf=0.995 elapsed_ms=17823
+STREAM stage=alsa_write turn=0 frame=60 decoded=73 queued=88 producer_done=1 elapsed_ms=17891
+STREAM stage=alsa_write turn=0 frame=61 decoded=73 queued=88 producer_done=1 elapsed_ms=17891
+STREAM stage=mimi_decode turn=0 frame=74 queued=88 producer_done=1 frame_ms=84.0 frame_cpu_ms=310.5 rtf=1.049 elapsed_ms=17907
+STREAM stage=mimi_decode turn=0 frame=75 queued=88 producer_done=1 frame_ms=77.4 frame_cpu_ms=288.6 rtf=0.967 elapsed_ms=17984
+STREAM stage=alsa_write turn=0 frame=62 decoded=75 queued=88 producer_done=1 elapsed_ms=18015
+STREAM stage=mimi_decode turn=0 frame=76 queued=88 producer_done=1 frame_ms=80.9 frame_cpu_ms=297.9 rtf=1.011 elapsed_ms=18065
+STREAM stage=mimi_decode turn=0 frame=77 queued=88 producer_done=1 frame_ms=70.8 frame_cpu_ms=281.1 rtf=0.885 elapsed_ms=18136
+STREAM stage=alsa_write turn=0 frame=63 decoded=77 queued=88 producer_done=1 elapsed_ms=18146
+STREAM stage=alsa_write turn=0 frame=64 decoded=77 queued=88 producer_done=1 elapsed_ms=18146
+STREAM stage=mimi_decode turn=0 frame=78 queued=88 producer_done=1 frame_ms=83.4 frame_cpu_ms=307.7 rtf=1.042 elapsed_ms=18220
+STREAM stage=alsa_write turn=0 frame=65 decoded=78 queued=88 producer_done=1 elapsed_ms=18265
+STREAM stage=alsa_write turn=0 frame=66 decoded=78 queued=88 producer_done=1 elapsed_ms=18265
+STREAM stage=mimi_decode turn=0 frame=79 queued=88 producer_done=1 frame_ms=91.7 frame_cpu_ms=328.2 rtf=1.146 elapsed_ms=18311
+STREAM stage=mimi_decode turn=0 frame=80 queued=88 producer_done=1 frame_ms=72.0 frame_cpu_ms=281.4 rtf=0.899 elapsed_ms=18383
+STREAM stage=alsa_write turn=0 frame=67 decoded=80 queued=88 producer_done=1 elapsed_ms=18390
+STREAM stage=mimi_decode turn=0 frame=81 queued=88 producer_done=1 frame_ms=80.8 frame_cpu_ms=305.0 rtf=1.010 elapsed_ms=18464
+STREAM stage=alsa_write turn=0 frame=68 decoded=81 queued=88 producer_done=1 elapsed_ms=18515
+STREAM stage=alsa_write turn=0 frame=69 decoded=81 queued=88 producer_done=1 elapsed_ms=18515
+STREAM stage=mimi_decode turn=0 frame=82 queued=88 producer_done=1 frame_ms=73.6 frame_cpu_ms=295.3 rtf=0.920 elapsed_ms=18538
+STREAM stage=mimi_decode turn=0 frame=83 queued=88 producer_done=1 frame_ms=76.1 frame_cpu_ms=292.4 rtf=0.952 elapsed_ms=18614
+STREAM stage=alsa_write turn=0 frame=70 decoded=83 queued=88 producer_done=1 elapsed_ms=18640
+STREAM stage=mimi_decode turn=0 frame=84 queued=88 producer_done=1 frame_ms=82.6 frame_cpu_ms=300.4 rtf=1.033 elapsed_ms=18697
+STREAM stage=alsa_write turn=0 frame=71 decoded=84 queued=88 producer_done=1 elapsed_ms=18765
+STREAM stage=alsa_write turn=0 frame=72 decoded=84 queued=88 producer_done=1 elapsed_ms=18765
+STREAM stage=mimi_decode turn=0 frame=85 queued=88 producer_done=1 frame_ms=93.2 frame_cpu_ms=342.8 rtf=1.165 elapsed_ms=18790
+STREAM stage=mimi_decode turn=0 frame=86 queued=88 producer_done=1 frame_ms=76.5 frame_cpu_ms=291.0 rtf=0.956 elapsed_ms=18867
+STREAM stage=alsa_write turn=0 frame=73 decoded=86 queued=88 producer_done=1 elapsed_ms=18890
+STREAM stage=mimi_decode turn=0 frame=87 queued=88 producer_done=1 frame_ms=82.3 frame_cpu_ms=296.9 rtf=1.029 elapsed_ms=18949
+STREAM stage=alsa_write turn=0 frame=74 decoded=87 queued=88 producer_done=1 elapsed_ms=19015
+STREAM stage=alsa_write turn=0 frame=75 decoded=87 queued=88 producer_done=1 elapsed_ms=19015
+STREAM stage=mimi_decode turn=0 frame=88 queued=88 producer_done=1 frame_ms=91.1 frame_cpu_ms=326.1 rtf=1.139 elapsed_ms=19041
+STREAM stage=alsa_write turn=0 frame=76 decoded=88 queued=88 producer_done=1 elapsed_ms=19139
+STREAM stage=alsa_write turn=0 frame=77 decoded=88 queued=88 producer_done=1 elapsed_ms=19264
+STREAM stage=alsa_write turn=0 frame=78 decoded=88 queued=88 producer_done=1 elapsed_ms=19265
+STREAM stage=alsa_write turn=0 frame=79 decoded=88 queued=88 producer_done=1 elapsed_ms=19389
+STREAM stage=alsa_write turn=0 frame=80 decoded=88 queued=88 producer_done=1 elapsed_ms=19390
+STREAM stage=alsa_write turn=0 frame=81 decoded=88 queued=88 producer_done=1 elapsed_ms=19514
+STREAM stage=alsa_write turn=0 frame=82 decoded=88 queued=88 producer_done=1 elapsed_ms=19639
+STREAM stage=alsa_write turn=0 frame=83 decoded=88 queued=88 producer_done=1 elapsed_ms=19640
+STREAM stage=alsa_write turn=0 frame=84 decoded=88 queued=88 producer_done=1 elapsed_ms=19764
+STREAM stage=alsa_write turn=0 frame=85 decoded=88 queued=88 producer_done=1 elapsed_ms=19890
+STREAM stage=alsa_write turn=0 frame=86 decoded=88 queued=88 producer_done=1 elapsed_ms=19890
+STREAM stage=alsa_write turn=0 frame=87 decoded=88 queued=88 producer_done=1 elapsed_ms=20014
+STREAM stage=alsa_write turn=0 frame=88 decoded=88 queued=88 producer_done=1 elapsed_ms=20139
+EVENT playback_end turn=0 result=0 elapsed_ms=22035 queue_waits=0 queue_wait_ms=0
+{"text":"Coins are a type of biological clock that is typically used to represent data points on a block, known as bands.<|im_end|>","steps":97,"text_steps":33,"audio_frames":88,"input_frames":20,"prompt_tokens":37,"samples":168960,"seed":20260822,"audio_encode_ms":2521,"audio_frontend_ms":33,"audio_encoder_ms":2469,"audio_projector_ms":20,"prefill_ms":3338,"prefill_thinker_ms":2168,"prefill_talker_ms":1169,"generate_ms":8978,"generate_thinker_ms":5286,"generate_talker_ms":3508,"mimi_drain_ms":4193,"audio_encode_cpu_ms":8075,"audio_encode_cpu_pct":320,"prefill_cpu_ms":10748,"prefill_cpu_pct":322,"generate_cpu_ms":33137,"generate_cpu_pct":369,"mimi_cpu_ms":15670,"mimi_cpu_pct":374,"model_ms":19041,"streaming":true,"input_streaming":true,"input_center_ms":480,"input_right_context_ms":240,"input_kv_cache_ms":1920,"decode_overlapped_with_generation":true,"decode_overlap_frames":34,"decoder_to_alsa_streaming":true,"end_to_end_streaming":false,"producer_end_ms":14847,"first_audio_ms":14849,"streaming_lead_ms":4192,"queue_waits":0,"queue_wait_ms":0,"text_limit_hit":false,"sentence_complete":true,"audio_drain_complete":true}
+ACCEPT wall=22.26 cpu=305% rss_kb=441412
