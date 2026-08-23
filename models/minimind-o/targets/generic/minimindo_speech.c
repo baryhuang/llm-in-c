@@ -7,6 +7,7 @@
 #include "minimindo_talker.h"
 #include "minimindo_thinker.h"
 #include "minimindo_tokenizer.h"
+#include "minimindo_volume.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -1732,20 +1733,22 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
     if(!safe_alsa_name(capture_device)||!safe_alsa_name(playback_device))return -1;
     if(hub_led_start()!=0)
         fprintf(stderr,"status LED worker unavailable; voice path continues\n");
+    if(minimindo_volume_monitor_start()!=0)
+        fprintf(stderr,"volume event monitor unavailable; voice path continues\n");
     hub_led_publish(HUB_LED_THINKING);
     const double warm_start=monotonic_seconds();
     (void)minimindo_parallel_pin_current(0U);
     (void)minimindo_parallel_session_begin(4U);
     const int warm_result=warm_resident(thinker,talker,tokenizer,mimi,audio_encoder);
     minimindo_parallel_session_end();
-    if(warm_result){hub_led_stop(HUB_LED_STOP_ERROR);return -1;}
+    if(warm_result){minimindo_volume_monitor_stop();hub_led_stop(HUB_LED_STOP_ERROR);return -1;}
     printf("READY pipeline=MiniMind-O-native-C input_streaming=always "
            "input_center_ms=480 input_right_context_ms=240 "
            "input_kv_cache_ms=1920 warmup_ms=%.0f capture=%s playback=%s\n",
            (monotonic_seconds()-warm_start)*1000,capture_device,
            playback_device);fflush(stdout);
     hub_led_publish(HUB_LED_LISTENING);
-    capture_queue capture;if(capture_start(&capture,capture_device)){perror("arecord");hub_led_stop(HUB_LED_STOP_ERROR);return -1;}
+    capture_queue capture;if(capture_start(&capture,capture_device)){perror("arecord");minimindo_volume_monitor_stop();hub_led_stop(HUB_LED_STOP_ERROR);return -1;}
     enum{CHUNK=CAPTURE_CHUNK,PREROLL=8192,MAX_SPEECH=3*16000};
     int16_t chunk[CHUNK],ring[PREROLL],pending_silence[20][CHUNK];
     int16_t *speech=malloc(MAX_SPEECH*sizeof(int16_t));
@@ -1754,7 +1757,7 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
     double noise=120.0,last_monitor=0;
     int speaking=0,hot=0,silent=0,active_chunks=0,cooldown=0;
     unsigned turn=0;
-    if(!speech){capture_stop(&capture);hub_led_stop(HUB_LED_STOP_ERROR);return -1;}
+    if(!speech){capture_stop(&capture);minimindo_volume_monitor_stop();hub_led_stop(HUB_LED_STOP_ERROR);return -1;}
     while(1){if(capture_next(&capture,chunk))break;size_t got=CHUNK;
         double squares=0,peak=0;for(size_t i=0;i<got;++i){double v=chunk[i];squares+=v*v;if(fabs(v)>peak)peak=fabs(v);}double rms=sqrt(squares/got);
         double threshold=fmax(280.0,noise*3.2);double now=monotonic_seconds();
@@ -1823,7 +1826,7 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
     }
     if(input.started)(void)live_input_finish(&input,1);
     free(input.prefilled.text_logits);
-    free(speech);capture_stop(&capture);hub_led_stop(HUB_LED_STOP_ERROR);return -1;
+    free(speech);capture_stop(&capture);minimindo_volume_monitor_stop();hub_led_stop(HUB_LED_STOP_ERROR);return -1;
 }
 
 int main(int argc,char **argv)

@@ -66,7 +66,7 @@ after that use the already-running servers. Raw validation measurements are in
 
 `run-minimindo-native-a113x.sh` is the persistent launcher for the separate
 native MiniMind-O service. It pins the executable to GitHub release
-`minimindo-native-a113x-v1.5.0` and the unchanged packed model images to
+`minimindo-native-a113x-v1.6.0` and the unchanged packed model images to
 `minimindo-native-a113x-v1.0.0`. Missing or corrupt files are downloaded to a
 per-process `.part` file, verified by SHA-256, chmodded, and atomically renamed
 before execution. The default live policy is first-sentence completion with a
@@ -88,6 +88,13 @@ generation, Mimi decode, and ALSA playback only publish the latest state to a
 nonblocking atomic mailbox, so LED control cannot block or lock the streaming
 path. Playback changes to blue only after the first 80 ms PCM frame has been
 successfully written to ALSA.
+
+The P10S volume wheel is also handled inside the always-resident native
+process. A blocking evdev thread reads volume-up, volume-down, and mute events
+and updates the ALSA `PCM` mixer immediately, including while speech PCM is
+being streamed. It uses a persistent mixer handle, a 2% step, no subprocess,
+and no model/audio-path lock. The service's 5% `ExecStartPre` remains only the
+safe non-zero boot default.
 
 To populate and verify a volatile install without starting the service:
 

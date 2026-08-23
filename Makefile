@@ -334,6 +334,7 @@ $(MINIMINDO_SPEECH): $(MINIMINDO_GENERIC)/minimindo_speech.c \
 	$(MINIMINDO_GENERIC)/minimindo_tokenizer.c $(MINIMINDO_GENERIC)/minimindo_tokenizer.h \
 	$(MINIMINDO_GENERIC)/minimindo_mimi.c $(MINIMINDO_GENERIC)/minimindo_mimi.h \
 	$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c $(MINIMINDO_GENERIC)/minimindo_audio_encoder.h \
+	$(MINIMINDO_GENERIC)/minimindo_volume.c $(MINIMINDO_GENERIC)/minimindo_volume.h \
 	$(MINIMINDO_PARALLEL)
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMINDO_GENERIC) \
@@ -343,6 +344,7 @@ $(MINIMINDO_SPEECH): $(MINIMINDO_GENERIC)/minimindo_speech.c \
 		$(MINIMINDO_GENERIC)/minimindo_tokenizer.c \
 		$(MINIMINDO_GENERIC)/minimindo_mimi.c \
 		$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c \
+		$(MINIMINDO_GENERIC)/minimindo_volume.c \
 		$(MINIMINDO_PARALLEL) \
 		-o $@ $(LDFLAGS) $(LDLIBS) -lm
 

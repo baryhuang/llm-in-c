@@ -49,6 +49,15 @@ The implementation makes the following production choices:
   playback slow pure blue. Blue begins only after ALSA accepts the first PCM
   frame, so the light describes externally observable playback rather than
   merely available model tokens.
+- Human controls must also remain outside turn scheduling. The P10S wheel is
+  an evdev key source, not an ALSA callback: a dedicated blocking I/O thread
+  maps its volume-up/down/mute events directly onto a persistent ALSA `PCM`
+  mixer handle. It never waits for inference or playback completion and never
+  shares model/audio locks. Monotonic kernel event timestamps make the actual
+  event-to-mixer latency visible in production logs. Native uinput integration
+  checks on A113X exercised the same production module at 6.299--19.641 ms per
+  event, including four updates during an active ALSA PCM stream, and restored
+  the initial mixer state.
 - After text EOS, Thinker advances one bridge at a time. The rejected 16-step
   bridge batch improved aggregate throughput but created a visible 0.7--0.9 s
   hole in Talker code arrival and therefore was not streaming.

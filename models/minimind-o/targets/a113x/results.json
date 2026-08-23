@@ -10,9 +10,10 @@
   "build": {
     "language": "C11",
     "compiler": "GCC 12.2, Debian 12 Linux/AArch64",
-    "flags": "-Ofast -march=armv8-a+simd -mtune=cortex-a53 -DMINIMINDO_GENERATION_W8A8=1 -pthread",
+    "flags": "-Ofast -march=armv8-a+simd -mtune=cortex-a53 -DMINIMINDO_GENERATION_W8A8=1 -DMINIMINDO_ALSA_VOLUME_MONITOR=1 -pthread -lasound",
     "openmp": false,
     "libgomp_linked": false,
+    "libasound_linked": true,
     "python_on_target": false
   },
   "cpu_scaling": {
@@ -365,6 +366,43 @@
       "critical_path_waits": 0,
       "model_or_audio_locks_added": 0
     },
+    "realtime_volume": {
+      "input_device": "P10S USB HID evdev, vendor 0x1234 product 0x5684",
+      "events": ["KEY_VOLUMEUP", "KEY_VOLUMEDOWN", "KEY_MUTE"],
+      "mixer": "ALSA hw:0 PCM",
+      "step_percent": 2,
+      "works_during_pcm_playback": true,
+      "subprocesses_per_event": 0,
+      "model_or_audio_locks_added": 0,
+      "idle_polling_wakeups": 0,
+      "event_clock": "CLOCK_MONOTONIC via EVIOCSCLOCKID",
+      "event_to_mixer_latency_logged": true,
+      "usb_reconnect_rescan_ms": 1000,
+      "deployed_event_device": "/dev/input/event1",
+      "deployed_thread_name": "volume-event",
+      "integration_test": {
+        "source": "tests/minimindo_volume_integration_test.c",
+        "transport": "native Linux uinput with P10S vendor/product and key capabilities",
+        "volume_raw_sequence": [205, 287, 205],
+        "volume_percent_sequence": [5, 7, 5],
+        "mute_sequence": [false, true, false],
+        "event_to_mixer_latency_ms": [12.340, 14.497, 6.299, 10.185],
+        "minimum_latency_ms": 6.299,
+        "maximum_latency_ms": 14.497,
+        "passed": true,
+        "restored_initial_state": true
+      },
+      "active_pcm_integration_test": {
+        "playback": "real ALSA plughw:0,0 24 kHz S16_LE stream of silence",
+        "events": ["up", "down", "mute", "mute"],
+        "event_to_mixer_latency_ms": [11.595, 19.641, 6.514, 7.639],
+        "minimum_latency_ms": 6.514,
+        "maximum_latency_ms": 19.641,
+        "playback_remained_open_during_updates": true,
+        "passed": true,
+        "restored_initial_state": true
+      }
+    },
     "persistent_pthread_workers": 3,
     "worker_mailbox": "bounded shared compute FIFO",
     "lock_scope": "compute FIFO enqueue/dequeue spin lock; data-queue empty-wait notification only",
@@ -500,9 +538,9 @@
     "volatile_across_reboot": true,
     "root_filesystem_free_mib": 138,
     "model_artifacts_mib": 377,
-    "binary_release_tag": "minimindo-native-a113x-v1.5.0",
-    "binary_sha256": "00de173208feb6f9dc2b7816f4f2a4beffa7c77c011c077030c6cd140221d6a0",
-    "runner_required_binary_sha256": "00de173208feb6f9dc2b7816f4f2a4beffa7c77c011c077030c6cd140221d6a0",
+    "binary_release_tag": "minimindo-native-a113x-v1.6.0",
+    "binary_sha256": "e0f881c70a1881669b2d3e36d6a936daa165cc01cd6dcd572c850b7d1e455c5e",
+    "runner_required_binary_sha256": "e0f881c70a1881669b2d3e36d6a936daa165cc01cd6dcd572c850b7d1e455c5e",
     "runner_required_binary_release_pending_physical_acceptance": false,
     "model_release_tag": "minimindo-native-a113x-v1.0.0",
     "model_release_contains_all_required_model_artifacts": true,

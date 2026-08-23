@@ -398,6 +398,22 @@ approximately three seconds even without detected silence and records
 must be handed to the accurate asynchronous path instead of occupying the
 interactive process.
 
+## Native A113X build
+
+The production executable is built before upload inside a Linux/AArch64
+environment with GCC and the ALSA development headers. The checked-in build
+script fixes the Cortex-A53, W8A8, real-time volume-monitor, pthread, and
+linker flags:
+
+```sh
+apt-get install gcc libc6-dev libasound2-dev
+models/minimind-o/targets/a113x/build-native-speech.sh \
+  build/minimindo-speech-a113x
+```
+
+The script uses `-Werror`, strips the result, and prints its SHA256. It does
+not run a compiler or generate code on the ThreeHub.
+
 ## Service and monitoring
 
 The deployed unit is `threehub-minimindo-native.service`. Follow activity with:
@@ -417,6 +433,39 @@ native 48 kHz stereo endpoint test proved that USB frames were advancing, and
 audible playback resumed as soon as the raw control moved to 5%. Keep this
 non-zero initialization in the service so USB resets and reboots cannot leave
 the endpoint silently accepting samples.
+
+After initialization, the native process owns live volume control. A dedicated
+I/O pthread discovers the P10S by USB vendor/product ID, blocks on its evdev
+descriptor, and consumes `KEY_VOLUMEUP`, `KEY_VOLUMEDOWN`, and `KEY_MUTE`.
+Each press/repeat changes the persistent ALSA `hw:0` `PCM` mixer directly in a
+2-percentage-point step. It does not invoke `amixer`, run a shell, wait for a
+turn boundary, or share a lock with capture, model inference, Mimi, or ALSA
+playback. Consequently the hardware wheel remains responsive while PCM is
+being streamed. `EVIOCSCLOCKID` selects monotonic event timestamps and each
+successful update logs its measured event-to-mixer latency:
+
+```text
+VOLUME event=up percent=7 muted=0 raw=287 latency_ms=12.340
+```
+
+The thread blocks indefinitely in `poll()` across the input descriptor and a
+stop pipe, so an idle wheel causes no polling wakeups. If USB disconnects, it
+releases the stale mixer/input handles and rescans once per second until the
+P10S returns.
+
+The A113X integration check in
+`tests/minimindo_volume_integration_test.c` creates a native Linux uinput
+device with the P10S USB identity and exact three key capabilities, selects it
+through `MINIMINDO_VOLUME_INPUT_DEVICE`, and drives the production event/mixer
+module. On the box, up/down changed raw PCM `205 -> 287 -> 205`, mute toggled
+`on -> off -> on`, and all four event-to-mixer updates completed in
+6.299--14.497 ms. The test restored 5%/unmuted and destroyed its input device;
+the resident service independently holds the physical `/dev/input/event1`.
+The same four-event sequence was then repeated while a real 24 kHz ALSA PCM
+stream was actively advancing. Updates completed in 6.514--19.641 ms without
+closing or restarting playback, and again restored 5%/unmuted. This is the
+production concurrency condition: mixer control remains independent of the
+streaming PCM writer.
 
 Successful native turns include per-frame `STREAM` events and stage fields
 `audio_encode_ms`,
@@ -444,7 +493,7 @@ require about 377 MiB. `/dev/shm` is erased on reboot. The persistent
 `/usr/local/bin/run-minimindo-native-a113x.sh` launcher solves that cold-boot
 failure by verifying every artifact against a pinned SHA256 and downloading
 only missing or corrupt files. The executable comes from
-[`minimindo-native-a113x-v1.5.0`](https://github.com/baryhuang/llm-in-c/releases/tag/minimindo-native-a113x-v1.5.0);
+[`minimindo-native-a113x-v1.6.0`](https://github.com/baryhuang/llm-in-c/releases/tag/minimindo-native-a113x-v1.6.0);
 the unchanged packed model images remain pinned to the v1.0.0 release.
 
 Downloads use a per-process `.part` file in `/dev/shm`; the launcher verifies
