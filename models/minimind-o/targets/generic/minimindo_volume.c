@@ -123,12 +123,24 @@ static void close_mixer(volume_mixer *mixer)
     memset(mixer, 0, sizeof(*mixer));
 }
 
+/*
+ * The P10S mixer is card 0 on the A113X hub and card 4 on the RK3588 hub,
+ * where the on-SoC DP/HDMI/ES8388 devices enumerate first. The card follows
+ * the enclosure, so it is configuration rather than a build-time constant.
+ */
+static const char *mixer_device(void)
+{
+    const char *configured = getenv("MINIMINDO_VOLUME_MIXER");
+    if (configured != NULL && configured[0] != '\0') return configured;
+    return "hw:0";
+}
+
 static int open_mixer(volume_mixer *mixer)
 {
     snd_mixer_selem_id_t *identifier = NULL;
     memset(mixer, 0, sizeof(*mixer));
     if (snd_mixer_open(&mixer->handle, 0) < 0 ||
-        snd_mixer_attach(mixer->handle, "hw:0") < 0 ||
+        snd_mixer_attach(mixer->handle, mixer_device()) < 0 ||
         snd_mixer_selem_register(mixer->handle, NULL, NULL) < 0 ||
         snd_mixer_load(mixer->handle) < 0 ||
         snd_mixer_selem_id_malloc(&identifier) < 0) {
@@ -270,9 +282,9 @@ static void *volume_thread(void *opaque)
         long value = 0;
         int enabled = 1;
         if (read_mixer_state(&mixer, &value, &enabled) == 0)
-            volume_log("VOLUME ready device=%s mixer=hw:0 element=PCM "
+            volume_log("VOLUME ready device=%s mixer=%s element=PCM "
                        "step_percent=%d percent=%ld muted=%d\n",
-                       input_path, VOLUME_STEP_PERCENT,
+                       input_path, mixer_device(), VOLUME_STEP_PERCENT,
                        mixer_percent(&mixer, value), !enabled);
         struct pollfd descriptors[2];
         descriptors[0].fd = monitor->wake_read;

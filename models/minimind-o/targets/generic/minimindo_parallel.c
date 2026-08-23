@@ -120,12 +120,48 @@ static void mailbox_wake(atomic_uint *active)
 #endif
 }
 
+/*
+ * Stage ownership is expressed in logical lanes 0..MAX_THREADS-1. A113X is a
+ * homogeneous quad Cortex-A53, so its lanes map onto CPUs 0..3 directly. On a
+ * big.LITTLE part the little cluster would halve generation throughput, so the
+ * target exports MINIMINDO_CPU_BASE: RK3588 sets 4 and every lane lands on a
+ * Cortex-A76. A base that would push a lane past the online CPUs is ignored
+ * rather than allowed to fail every pinning call.
+ */
+#if defined(__linux__)
+static unsigned cpu_base_value;
+
+static void cpu_base_resolve(void)
+{
+    const char *configured = getenv("MINIMINDO_CPU_BASE");
+    if (configured == NULL || configured[0] == '\0') return;
+    char *end = NULL;
+    const unsigned long parsed = strtoul(configured, &end, 10);
+    if (end == configured || *end != '\0') return;
+    if (parsed + (unsigned long)MAX_THREADS > (unsigned long)CPU_SETSIZE)
+        return;
+    const long online = sysconf(_SC_NPROCESSORS_ONLN);
+    if (online > 0 && parsed + (unsigned long)MAX_THREADS > (unsigned long)online)
+        return;
+    cpu_base_value = (unsigned)parsed;
+}
+
+static unsigned cpu_base(void)
+{
+    static pthread_once_t cpu_base_once = PTHREAD_ONCE_INIT;
+    pthread_once(&cpu_base_once, cpu_base_resolve);
+    return cpu_base_value;
+}
+#endif
+
 int minimindo_parallel_pin_current(unsigned cpu)
 {
 #if defined(__linux__)
     cpu_set_t set;
+    const unsigned target = cpu_base() + cpu;
+    if (target >= (unsigned)CPU_SETSIZE) return -1;
     CPU_ZERO(&set);
-    CPU_SET(cpu, &set);
+    CPU_SET(target, &set);
     return pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
 #else
     (void)cpu;

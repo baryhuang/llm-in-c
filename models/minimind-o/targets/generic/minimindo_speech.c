@@ -73,10 +73,12 @@ static const char *hub_led_name(hub_led_state state)
     }
 }
 
+#define HUB_LED_SUPERVISOR "/usr/local/bin/supervisor"
+
 static int hub_led_execute_command(const char *command)
 {
     char *const arguments[] = {
-        (char *)"/usr/local/bin/supervisor", (char *)"led",
+        (char *)HUB_LED_SUPERVISOR, (char *)"led",
         (char *)command, NULL
     };
     posix_spawn_file_actions_t actions;
@@ -158,6 +160,14 @@ static void *hub_led_thread(void *opaque)
 
 static int hub_led_start(void)
 {
+    /* Only the ThirdReality hub ships the supervisor that owns the RGB GPIO
+     * lines. Without it every state change would spawn a doomed process, so
+     * boards such as RK3588 run the voice path with no LED worker at all.
+     * MINIMINDO_HUB_LED=0 disables it explicitly. */
+    const char *configured = getenv("MINIMINDO_HUB_LED");
+    if (configured != NULL && configured[0] == '0') return -1;
+    if (access(HUB_LED_SUPERVISOR, X_OK) != 0) return -1;
+
     hub_led_worker *worker = &resident_led;
     memset(worker, 0, sizeof(*worker));
     worker->wake_read = -1;

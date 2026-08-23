@@ -103,3 +103,25 @@ MINIMINDO_DOWNLOAD_ONLY=1 \
   MINIMINDO_INSTALL_DIR=/dev/shm/minimindo-o-native-v1 \
   ./run-minimindo-native-a113x.sh
 ```
+
+## MiniMind-O on RK3588
+
+`run-minimindo-native-rk3588.sh` is the same launcher for the RK3588 hub. It
+downloads only the packed model images — the executable is built on the board
+by `models/minimind-o/targets/rk3588/build-native-speech.sh` and installed to
+`/usr/local/bin`, because no RK3588 release binary is published.
+
+The launcher resolves the P10S card index by name from `/proc/asound/cards`
+instead of assuming card 0, and exports the three settings that differ from the
+ThirdReality hub: `MINIMINDO_CPU_BASE=4` so the four inference lanes land on the
+Cortex-A76 cluster rather than the A55 cluster, `MINIMINDO_VOLUME_MIXER=hw:<card>`
+for the volume wheel, and `MINIMINDO_HUB_LED=0` because this board has no
+`supervisor` binary owning the RGB lines. Everything else — streaming policy,
+Mimi decoder, VAD, playback path — is the shared runtime. The port and its
+measurements are recorded in
+[`models/minimind-o/targets/rk3588/README.md`](../../models/minimind-o/targets/rk3588/README.md).
+
+```sh
+install -m 0644 minimindo-native-rk3588.service /etc/systemd/system/
+systemctl enable --now minimindo-native-rk3588.service
+```

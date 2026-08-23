@@ -1,0 +1,16 @@
+[Unit]
+Description=MiniMind-O native speech-to-speech (RK3588)
+After=sound.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=MINIMINDO_SPEECH_BINARY=/usr/local/bin/minimindo-speech-rk3588
+ExecStart=/usr/local/bin/run-minimindo-native-rk3588.sh
+Restart=always
+RestartSec=30
+Nice=-5
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target

@@ -18,7 +18,10 @@ minimal-lock FIFO; the remaining 99--128 ms observed cadence for each 80 ms
 frame is exposed as a throughput deficit, not hidden with buffering. There is
 no production batch-decoder or playback-mode switch. Target
 architecture, correctness gates and measurements are in the
-[A113X target record](targets/a113x/README.md). The architectural mistakes,
+[A113X target record](targets/a113x/README.md). The second target, a
+Rockchip RK3588 hub, keeps the pipeline and adjusts the CPU lane map, the USB
+audio card index, the status LED and the tuning flags; that port is recorded in
+the [RK3588 target record](targets/rk3588/README.md). The architectural mistakes,
 measurement lessons, and reusable streaming rules from the prototype are in
 [LEARNINGS.md](LEARNINGS.md).
 
