@@ -62,7 +62,22 @@ def message_text(message):
     return content
 
 
-def render_template(messages, thinking=False, effort="xhigh"):
+def chat_tool_table(tools):
+    """Chat-completions tools are already {"type":"function","function":
+    {...}} - the exact shape the Qwen3.8 template dumps - so the manifest
+    passes through. The table is only needed to type function arguments
+    when a call comes back."""
+    table = {}
+    for tool in tools or []:
+        if isinstance(tool, dict) and tool.get("type") == "function":
+            schema = tool.get("function") or {}
+            name = schema.get("name")
+            if name:
+                table[name] = (None, schema)
+    return table
+
+
+def render_template(messages, thinking=False, effort="xhigh", tools=None):
     """The official Qwen3.8 template. Default is the pinned
     enable_thinking=false rendering; thinking mode opens the reply at
     '<think>\n' and injects the Qwen3.8 reasoning-effort instructions
@@ -74,34 +89,78 @@ def render_template(messages, thinking=False, effort="xhigh"):
     Qwen3.8 preserve_thinking semantics. This also makes each follow-up
     request an exact token extension of the resident conversation state,
     so the engine prefills only the new turn instead of the whole
-    history."""
+    history.
+
+    With `tools`, the system turn also carries the template's own tool
+    block, assistant turns replay their tool_calls and role="tool"
+    messages become <tool_response> blocks - what an agent front end
+    speaking chat completions needs.
+
+    Returns (prompt, system turn); the system turn is declared to the
+    engine as the reusable checkpoint prefix."""
     parts = []
     remaining = list(messages)
+    head = []
     instructions = REASONING_EFFORT_TEXT.get(effort) if thinking else None
+    if instructions:
+        head.append(instructions)
+    if tools:
+        block = ["# Tools\n\nYou have access to the following functions:"
+                 "\n\n<tools>"]
+        for tool in tools:
+            block.append("\n" + json.dumps(tool))
+        block.append("\n</tools>")
+        block.append(TOOL_CALL_FORMAT)
+        head.append("".join(block))
     if remaining and remaining[0].get("role") == "system":
-        content = message_text(remaining[0]).strip()
+        content = strip_blocks(message_text(remaining[0]))
         remaining = remaining[1:]
-        head = (instructions + "\n\n" if instructions else "") + content
-        if head:
-            parts.append(f"<|im_start|>system\n{head}<|im_end|>\n")
-    elif instructions:
-        parts.append(f"<|im_start|>system\n{instructions}<|im_end|>\n")
-    for message in remaining:
+        if content:
+            head.append(content)
+    system_turn = ""
+    if head:
+        system_turn = "<|im_start|>system\n" + "\n\n".join(head) + \
+            "<|im_end|>\n"
+        parts.append(system_turn)
+
+    index = 0
+    while index < len(remaining):
+        message = remaining[index]
         role = message.get("role", "user")
-        if role not in ("system", "user", "assistant"):
-            role = "user"
+        if role == "tool":
+            blocks = []
+            while index < len(remaining) and \
+                    remaining[index].get("role") == "tool":
+                text = message_text(remaining[index])
+                blocks.append(f"\n<tool_response>\n{text}\n</tool_response>")
+                index += 1
+            parts.append("<|im_start|>user" + "".join(blocks) + "<|im_end|>\n")
+            continue
+        index += 1
         content = message_text(message)
         if role == "assistant":
             reasoning = message.get("reasoning_content") or ""
+            calls = []
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or call
+                calls.append(render_call_block(function.get("name", ""),
+                                               function.get("arguments", "{}")))
+            body = content
+            if calls:
+                body += ("\n\n" if content.strip() else "") + \
+                    "\n".join(calls)
             parts.append(f"<|im_start|>assistant\n<think>\n{reasoning}\n"
-                         f"</think>\n\n{content}<|im_end|>\n")
+                         f"</think>\n\n{body}<|im_end|>\n")
         else:
-            parts.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
+            if role not in ("user", "system"):
+                role = "user"
+            parts.append(f"<|im_start|>user\n{strip_blocks(content)}"
+                         f"<|im_end|>\n")
     if thinking:
         parts.append("<|im_start|>assistant\n<think>\n")
     else:
         parts.append("<|im_start|>assistant\n<think>\n\n</think>\n\n")
-    return "".join(parts)
+    return "".join(parts), system_turn
 
 
 class ThinkSplitter:
@@ -639,7 +698,10 @@ class Handler(BaseHTTPRequestHandler):
             elif level in ("low", "medium", "xhigh", "high"):
                 thinking = True
                 effort = "xhigh" if level == "high" else level
-        rendered = render_template(messages, thinking, effort)
+        tools = request.get("tools")
+        table = chat_tool_table(tools)
+        rendered, system_turn = render_template(messages, thinking,
+                                                effort, tools)
         # Per-request sampling passes straight through to the engine.
         # Absent fields keep the engine defaults (greedy, which also
         # enables lossless speculative decoding); a request that sets
@@ -663,10 +725,28 @@ class Handler(BaseHTTPRequestHandler):
             include_usage = bool(
                 (request.get("stream_options") or {}).get("include_usage"))
             self.stream_completion(rendered, identifier, created,
-                                   include_usage, sampling, thinking)
+                                   include_usage, sampling, thinking,
+                                   table, system_turn)
         else:
             self.plain_completion(rendered, identifier, created, sampling,
-                                  thinking)
+                                  thinking, table, system_turn)
+
+    def log_turn(self, api, tool_count, stats, calls):
+        prompt_tokens = stats.get("prompt_tokens", 0)
+        reused = stats.get("prefilled_from", 0)
+        generated = stats.get("tokens", 0)
+        total = stats.get("total_s", 0.0) or 0.0
+        first = stats.get("first_token_s", 0.0) or 0.0
+        rate = generated / (total - first) if total > first else 0.0
+        print(f"{api}: {tool_count} tools, {prompt_tokens} prompt tokens "
+              f"({reused} reused), {first:.1f} s to first token, "
+              f"{generated} generated at {rate:.1f} tok/s, "
+              f"calls={calls or 'none'}", flush=True)
+        print(f"           ttft breakdown: restore "
+              f"{stats.get('restore_s', 0.0):.2f} s, prefill "
+              f"{stats.get('prefill_s', 0.0):.2f} s, forward "
+              f"{stats.get('forward_s', 0.0):.2f} s, checkpoint save "
+              f"{stats.get('save_s', 0.0):.2f} s", flush=True)
 
     # --- Responses API ---------------------------------------------
 
@@ -872,11 +952,23 @@ class Handler(BaseHTTPRequestHandler):
             print(f"responses stream aborted: {failure}", flush=True)
             self.close_connection = True
 
+    def chat_tool_calls(self, text, table, identifier):
+        """Parsed <tool_call> blocks in the chat-completions shape."""
+        calls = []
+        for index, call in enumerate(parse_tool_calls(text, table)[1]):
+            calls.append({"id": f"call_{identifier[9:]}_{index}",
+                          "type": "function",
+                          "function": {"name": call["name"],
+                                       "arguments": call["arguments"]}})
+        return calls
+
     def plain_completion(self, rendered, identifier, created,
-                         sampling=None, thinking=False):
+                         sampling=None, thinking=False, table=None,
+                         prefix=None):
         chunks = []
         try:
-            stats = ENGINE.generate(rendered, chunks.append, sampling)
+            stats = ENGINE.generate(rendered, chunks.append, sampling,
+                                    prefix)
         except RuntimeError as failure:
             self.send_json({"error": {"message": str(failure),
                                       "type": "server_error"}}, 500)
@@ -892,11 +984,20 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 message["reasoning_content"] = text
                 message["content"] = ""
+        finish = stats.get("stop", "stop")
+        if table:
+            leading, _ = parse_tool_calls(message["content"], table)
+            calls = self.chat_tool_calls(message["content"], table,
+                                         identifier)
+            if calls:
+                message["content"] = leading or None
+                message["tool_calls"] = calls
+                finish = "tool_calls"
         self.send_json({
             "id": identifier, "object": "chat.completion",
             "created": created, "model": MODEL_ID,
             "choices": [{"index": 0, "message": message,
-                "finish_reason": stats.get("stop", "stop")}],
+                "finish_reason": finish}],
             "usage": {
                 "prompt_tokens": stats.get("prompt_tokens", 0),
                 "completion_tokens": stats.get("tokens", 0),
@@ -905,7 +1006,8 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def stream_completion(self, rendered, identifier, created,
-                          include_usage, sampling=None, thinking=False):
+                          include_usage, sampling=None, thinking=False,
+                          table=None, prefix=None):
         # The SSE body carries no Content-Length, so it must use chunked
         # transfer encoding: without the 0-length terminator a keep-alive
         # client never sees the body end and its UI stays in the waiting
@@ -934,22 +1036,43 @@ class Handler(BaseHTTPRequestHandler):
         try:
             event(chunk({"role": "assistant", "content": ""}))
             splitter = ThinkSplitter(thinking)
+            # A tool call must not reach the client as assistant text, so
+            # the visible stream stops at <tool_call> and the parsed call
+            # goes out as one tool_calls delta at the end.
+            tools = ToolCallSplitter() if table else None
+            answer = []
+
+            def emit(content):
+                answer.append(content)
+                visible = tools.feed(content) if tools else content
+                if visible:
+                    event(chunk({"content": visible}))
 
             def deliver(text):
                 reasoning, content = splitter.feed(text)
                 if reasoning:
                     event(chunk({"reasoning_content": reasoning}))
                 if content:
-                    event(chunk({"content": content}))
+                    emit(content)
 
-            stats = ENGINE.generate(rendered, deliver, sampling)
+            stats = ENGINE.generate(rendered, deliver, sampling, prefix)
             tail = splitter.flush()
             if tail:
                 if splitter.done:
-                    event(chunk({"content": tail}))
+                    emit(tail)
                 else:
                     event(chunk({"reasoning_content": tail}))
-            event(chunk({}, stats.get("stop", "stop")))
+            finish = stats.get("stop", "stop")
+            calls = self.chat_tool_calls("".join(answer), table,
+                                         identifier) if table else []
+            self.log_turn("chat", len(table or {}), stats,
+                          [c["function"]["name"] for c in calls])
+            if calls:
+                finish = "tool_calls"
+                event(chunk({"tool_calls": [
+                    dict(call, index=index)
+                    for index, call in enumerate(calls)]}))
+            event(chunk({}, finish))
             if include_usage:
                 prompt_tokens = stats.get("prompt_tokens", 0)
                 completion_tokens = stats.get("tokens", 0)

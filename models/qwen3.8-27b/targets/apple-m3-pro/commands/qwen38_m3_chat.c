@@ -439,9 +439,9 @@ int main(int argc, char **argv) {
      * across conversations. The turn checkpoint above only ever holds
      * the conversation in flight, so a new session shares nothing with
      * it past the system turn and pays a full prefill; this slot is
-     * what makes that first turn cheap. Valid only while no prefill has
-     * started below system_count, which would overwrite the attention
-     * KV the restore depends on. */
+     * what makes that first turn cheap. The slot mirrors its own KV
+     * span, so it survives an unrelated request prefilling over the low
+     * positions, and a reset. */
     uint32_t *system_tokens = malloc((size_t)capacity *
                                      sizeof(*system_tokens));
     uint32_t *prefix_ids = malloc((size_t)capacity *
@@ -451,6 +451,13 @@ int main(int argc, char **argv) {
     const char *continue_env = getenv("QWEN38_CONTINUE");
     int continuation = continue_env == NULL ||
                        strcmp(continue_env, "0") != 0;
+    /* A declared prefix is only worth a checkpoint if it is long enough
+     * to be worth skipping. Agent front ends interleave short side
+     * requests - a session-title generation, say - with the real turns,
+     * and without a floor one of those would take the slot away from an
+     * eleven-thousand-token agent preamble. */
+    const char *prefix_min_env = getenv("QWEN38_PREFIX_MIN");
+    uint32_t prefix_min = parse_u32(prefix_min_env, 2048);
     stream_text stream = {NULL, 0, 0, 0, 0};
     char *line = NULL;
     size_t line_capacity = 0;
@@ -625,11 +632,8 @@ int main(int argc, char **argv) {
                         "snapshot %u system %u prompt %zu\n",
                         history_count, snapshot_count, system_count,
                         prompt_count);
-            /* Reset zeroes the attention KV, so the system checkpoint's
-             * keys and values go with it. */
             qwen38_m3_model_reset(model);
             history_count = 0;
-            system_valid = 0;
         }
         stage_restore = seconds_now() - stage_mark;
         stage_mark = seconds_now();
@@ -646,7 +650,7 @@ int main(int argc, char **argv) {
              * boundary to take the checkpoint, then continues. The only
              * cost is one partly filled prompt chunk at the seam. */
             uint32_t boundary = start_position;
-            if (start_position == 0 && prefix_count != 0 &&
+            if (start_position == 0 && prefix_count >= prefix_min &&
                 prefix_count < prefill_end)
                 boundary = prefix_count;
             if (prefill_span(model, prompt_ids, start_position, boundary,
@@ -658,7 +662,7 @@ int main(int argc, char **argv) {
                 stage_prefill += seconds_now() - stage_mark;
                 stage_mark = seconds_now();
                 if (qwen38_m3_model_prefix_save_slot(
-                        model, QWEN38_M3_PREFIX_SYSTEM, error,
+                        model, QWEN38_M3_PREFIX_SYSTEM, boundary, error,
                         sizeof(error)) == 0) {
                     memcpy(system_tokens, prompt_ids,
                            (size_t)boundary * sizeof(uint32_t));
@@ -689,7 +693,6 @@ int main(int argc, char **argv) {
         if (failed) {
             qwen38_m3_model_reset(model);
             history_count = 0;
-            system_valid = 0;
             continue;
         }
         stage_forward = seconds_now() - stage_mark;

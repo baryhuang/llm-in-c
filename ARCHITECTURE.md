@@ -105,17 +105,23 @@ first session after the model loads prefills it in 235.5 s, and later sessions
 in the same workspace restore 10,399 of those tokens and reach first token in
 1.7 s. Turns inside a session hit the turn slot and cost 2.9-4.9 s.
 
-The correctness condition is narrow and stated explicitly. Restore rewinds only
-the GDN state; the attention KV below the restore position must still hold that
-prefix's keys and values. That holds while no prefill has started below the
-boundary, and `qwen38_m3_model_reset` zeroes the caches and invalidates both
-slots. Making that argument requires knowing that the target's prefill only
-ever writes forward from its start position, which is a property of this
-runtime and not an assumption available about a general engine.
+The two slots make different correctness bargains, which is the point of having
+two. The turn slot copies only the GDN state, because within one conversation
+nothing prefills below the boundary and the attention KV there is still the
+prefix's own. Stating that requires knowing the target's prefill only ever
+writes forward from its start position — a property of this runtime, not an
+assumption available about a general engine.
 
-The cost is one state copy per slot — 158.9 MB of recurrent and convolution
-state, with the KV cache deliberately not copied — and one partly filled prompt
-chunk at the seam where prefill stops to take the checkpoint.
+The session slot cannot make that bargain: agent front ends interleave short
+side requests with the real turns, and one of those resets the caches. It
+therefore mirrors its KV span as well, so a restore rebuilds both halves of the
+state. A floor on the declared prefix keeps those side requests from taking the
+slot in the first place.
+
+The cost is 158.9 MB of recurrent and convolution state per slot, plus 64 KiB
+per position of mirrored KV for the session slot — 765 MB for an
+eleven-thousand-token agent preamble — and one partly filled prompt chunk at
+the seam where prefill stops to take the checkpoint.
 
 ## Model-adapter requirements
 

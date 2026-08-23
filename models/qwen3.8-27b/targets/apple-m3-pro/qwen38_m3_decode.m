@@ -287,6 +287,9 @@ enum {
     id<MTLBuffer> ckpt_beta;
     id<MTLBuffer> prefix_recurrent[QWEN38_M3_PREFIX_SLOTS];
     id<MTLBuffer> prefix_convolution[QWEN38_M3_PREFIX_SLOTS];
+    id<MTLBuffer> prefix_key[QWEN38_M3_PREFIX_SLOTS];
+    id<MTLBuffer> prefix_value[QWEN38_M3_PREFIX_SLOTS];
+    uint32_t prefix_kv_positions[QWEN38_M3_PREFIX_SLOTS];
     id<MTLBuffer> p_token_ids;
     id<MTLBuffer> p_hidden_half;
     id<MTLBuffer> p_normalized;
@@ -2227,8 +2230,14 @@ static int rollback_to_accept(qwen38_m3_model *model, uint32_t rows,
  * follow-up request that extends a previous prompt restores this
  * checkpoint and prefills only the new suffix. Buffers allocate on
  * first save. */
+/* Bytes of KV cache one position occupies in one attention layer: four
+ * grouped-query heads of 256 FP16 values. The cache is position-major,
+ * so the first `positions` rows are a contiguous span. */
+enum { QWEN38_M3_KV_BYTES_PER_POSITION = 4 * 256 * sizeof(uint16_t) };
+
 static int prefix_state_copy(qwen38_m3_model *model, uint32_t slot,
-                             int restore, char *error_message,
+                             int restore, uint32_t kv_positions,
+                             char *error_message,
                              size_t error_message_capacity) {
     if (model == NULL || model->runtime == NULL ||
         slot >= QWEN38_M3_PREFIX_SLOTS) {
@@ -2268,6 +2277,37 @@ static int prefix_state_copy(qwen38_m3_model *model, uint32_t slot,
             return 2;
         }
     }
+    /* A slot that also mirrors the attention KV survives an unrelated
+     * request prefilling over the low positions - which is exactly what
+     * an agent front end does when it asks a short side question, such
+     * as generating a session title, between turns. Sized on demand and
+     * grown if a longer prefix arrives. */
+    if (!restore && kv_positions != 0) {
+        size_t attention_layers = 0;
+        for (Q38DecodeLayer *layer in r->layers)
+            if (layer->attention) ++attention_layers;
+        size_t needed = attention_layers * (size_t)kv_positions *
+                        QWEN38_M3_KV_BYTES_PER_POSITION;
+        if (r->prefix_key[slot] == nil ||
+            r->prefix_key[slot].length < needed) {
+            r->prefix_key[slot] = [r->device newBufferWithLength:needed
+                options:MTLResourceStorageModeShared];
+            r->prefix_value[slot] = [r->device newBufferWithLength:needed
+                options:MTLResourceStorageModeShared];
+        }
+        if (r->prefix_key[slot] == nil || r->prefix_value[slot] == nil) {
+            decode_error(error_message, error_message_capacity,
+                         @"cannot allocate prefix KV mirror");
+            return 2;
+        }
+        r->prefix_kv_positions[slot] = kv_positions;
+    }
+    if (restore) {
+        kv_positions = r->prefix_kv_positions[slot];
+        if (kv_positions != 0 && (r->prefix_key[slot] == nil ||
+                                  r->prefix_value[slot] == nil))
+            kv_positions = 0;
+    }
     @autoreleasepool {
         id<MTLCommandBuffer> command = [r->queue commandBuffer];
         id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
@@ -2301,6 +2341,32 @@ static int prefix_state_copy(qwen38_m3_model *model, uint32_t slot,
             recurrent_offset += layer->recurrent_state.length;
             convolution_offset += layer->convolution_state.length;
         }
+        if (kv_positions != 0) {
+            NSUInteger span = (NSUInteger)kv_positions *
+                              QWEN38_M3_KV_BYTES_PER_POSITION;
+            NSUInteger kv_offset = 0;
+            for (Q38DecodeLayer *layer in r->layers) {
+                if (!layer->attention) continue;
+                if (restore) {
+                    [blit copyFromBuffer:r->prefix_key[slot]
+                            sourceOffset:kv_offset
+                                toBuffer:layer->key_cache
+                       destinationOffset:0 size:span];
+                    [blit copyFromBuffer:r->prefix_value[slot]
+                            sourceOffset:kv_offset
+                                toBuffer:layer->value_cache
+                       destinationOffset:0 size:span];
+                } else {
+                    [blit copyFromBuffer:layer->key_cache sourceOffset:0
+                                toBuffer:r->prefix_key[slot]
+                       destinationOffset:kv_offset size:span];
+                    [blit copyFromBuffer:layer->value_cache sourceOffset:0
+                                toBuffer:r->prefix_value[slot]
+                       destinationOffset:kv_offset size:span];
+                }
+                kv_offset += span;
+            }
+        }
         [blit endEncoding];
         [command commit];
         [command waitUntilCompleted];
@@ -2315,9 +2381,10 @@ static int prefix_state_copy(qwen38_m3_model *model, uint32_t slot,
 
 int qwen38_m3_model_prefix_save_slot(qwen38_m3_model *model,
                                      uint32_t slot,
+                                     uint32_t kv_positions,
                                      char *error_message,
                                      size_t error_message_capacity) {
-    return prefix_state_copy(model, slot, 0, error_message,
+    return prefix_state_copy(model, slot, 0, kv_positions, error_message,
                              error_message_capacity);
 }
 
@@ -2325,7 +2392,7 @@ int qwen38_m3_model_prefix_restore_slot(qwen38_m3_model *model,
                                         uint32_t slot,
                                         char *error_message,
                                         size_t error_message_capacity) {
-    return prefix_state_copy(model, slot, 1, error_message,
+    return prefix_state_copy(model, slot, 1, 0, error_message,
                              error_message_capacity);
 }
 
@@ -2333,7 +2400,7 @@ int qwen38_m3_model_prefix_save(qwen38_m3_model *model,
                                 char *error_message,
                                 size_t error_message_capacity) {
     return qwen38_m3_model_prefix_save_slot(
-        model, QWEN38_M3_PREFIX_TURN, error_message,
+        model, QWEN38_M3_PREFIX_TURN, 0, error_message,
         error_message_capacity);
 }
 

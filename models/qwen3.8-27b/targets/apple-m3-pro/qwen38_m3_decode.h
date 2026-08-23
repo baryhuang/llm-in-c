@@ -150,19 +150,25 @@ void qwen38_m3_model_mtp_context(
  *                            sessions and is otherwise re-prefilled from
  *                            scratch every time one starts.
  *
- * Restoring only rewinds GDN state. The attention KV below the restore
- * position must still hold that prefix's keys and values, so a restore
- * is valid only while nothing has prefilled from an earlier position;
- * qwen38_m3_model_reset zeroes the caches and invalidates both slots. */
+ * A slot saved with kv_positions == 0 rewinds GDN state only, so the
+ * attention KV below the restore position must still hold that prefix's
+ * keys and values; that holds within one conversation. A slot saved
+ * with kv_positions mirrors the KV span too and therefore survives an
+ * unrelated request, including one that reset the caches. */
 enum {
     QWEN38_M3_PREFIX_TURN = 0,
     QWEN38_M3_PREFIX_SYSTEM = 1,
     QWEN38_M3_PREFIX_SLOTS = 2
 };
 
+/* kv_positions mirrors that many leading positions of the attention KV
+ * into the slot as well. Pass 0 for a slot that is only used while the
+ * caches are known intact; pass the prefix length for one that must
+ * survive an unrelated request prefilling over the low positions. */
 int qwen38_m3_model_prefix_save_slot(
     qwen38_m3_model *model,
     uint32_t slot,
+    uint32_t kv_positions,
     char *error_message,
     size_t error_message_capacity);
 

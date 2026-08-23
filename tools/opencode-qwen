@@ -1,0 +1,76 @@
+#!/bin/sh
+# opencode driven by the local Qwen3.8-27B C/Metal runtime.
+#
+# Same shape as tools/codex-qwen: bring the server up if it is not
+# already serving a large enough context, then run opencode against it.
+# OPENCODE_CONFIG points at a config of its own, so the user's normal
+# ~/.config/opencode/opencode.json - other providers, MCP servers - is
+# left alone and does not add tokens to a local prompt.
+set -eu
+
+repository=$(CDPATH= cd -- "$(dirname -- "$(readlink "$0" || echo "$0")")/.." \
+    && pwd)
+port=${QWEN38_PORT:-8199}
+health="http://127.0.0.1:$port/health"
+log=${QWEN38_CODEX_LOG:-"$repository/tmp/qwen38-codex-serve.log"}
+config=${OPENCODE_CONFIG:-"$HOME/.config/opencode/qwen.json"}
+context=${QWEN38_CONTEXT:-32768}
+maximum_new=${QWEN38_MAX_TOKENS:-4096}
+
+if ! command -v opencode > /dev/null 2>&1; then
+    echo "opencode-qwen: the opencode CLI is not on PATH" >&2
+    exit 2
+fi
+if [ ! -f "$config" ]; then
+    echo "opencode-qwen: $config is missing; see" \
+         "$repository/models/qwen3.8-27b/targets/apple-m3-pro/README.md" >&2
+    exit 2
+fi
+
+running_context=$(curl -sf --max-time 2 "$health" 2>/dev/null |
+    sed -n 's/.*"context": *\([0-9]*\).*/\1/p')
+
+if [ -n "$running_context" ] && [ "$running_context" -lt "$context" ]; then
+    echo "Restarting the model server: context $running_context is" \
+         "smaller than $context." >&2
+    pkill -f qwen38_serve.py 2>/dev/null || true
+    pkill -x qwen38-m3-chat 2>/dev/null || true
+    waited=0
+    while pgrep -f qwen38_serve.py > /dev/null 2>&1; do
+        sleep 1
+        waited=$((waited + 1))
+        [ "$waited" -ge 15 ] && break
+    done
+    running_context=""
+fi
+
+if [ -z "$running_context" ]; then
+    if ! curl -sf --max-time 2 "$health" > /dev/null 2>&1; then
+        echo "Starting Qwen3.8-27B (context $context, one-time weight" \
+             "wiring, ~10 s)..." >&2
+        QWEN38_CONTEXT="$context" QWEN38_MAX_TOKENS="$maximum_new" \
+            nohup python3 "$repository/tools/qwen38_serve.py" \
+                --port "$port" >> "$log" 2>&1 &
+        waited=0
+        until curl -sf --max-time 2 "$health" > /dev/null 2>&1; do
+            sleep 1
+            waited=$((waited + 1))
+            if [ "$waited" -ge 180 ]; then
+                echo "opencode-qwen: server did not become ready; see" \
+                     "$log" >&2
+                exit 3
+            fi
+        done
+    fi
+    echo "Model server ready on port $port." >&2
+fi
+
+# Every token of prompt is paid twice on this target - once in prefill,
+# again in the attention of each decode step - so the catalogues opencode
+# would otherwise inline are off unless the caller asks for them.
+export OPENCODE_CONFIG="$config"
+export OPENCODE_DISABLE_AUTOUPDATE=${OPENCODE_DISABLE_AUTOUPDATE:-1}
+export OPENCODE_DISABLE_EXTERNAL_SKILLS=${OPENCODE_DISABLE_EXTERNAL_SKILLS:-1}
+export OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=${OPENCODE_DISABLE_CLAUDE_CODE_SKILLS:-1}
+
+exec opencode "$@"

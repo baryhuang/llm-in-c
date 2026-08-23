@@ -161,17 +161,53 @@ where it should add - with both checkpoints in play:
 | Answer | 10,765 | 10,698 | 3.0 s | final message |
 
 Measured on the pinned machine with `QWEN38_CONTEXT=32768`, decoding at
-12-23 tok/s. The cold turn is prefill-bound at roughly 44 tok/s. It is now paid
+12-23 tok/s. The cold turn is prefill-bound at roughly 44 tok/s. It is paid
 once per server, not once per session: the first `codex-qwen` after the model
 loads waits about four minutes, and every session after it starts in under two
-seconds. Anything that resets the engine - a different system turn, a chat
-completions request, a context overflow - gives up the slot and the next
-session pays the cold prefill again.
+seconds.
+
+The session slot mirrors its own KV span, so an unrelated request in between -
+even one that resets the caches - does not cost it. Only another prompt of at
+least `QWEN38_PREFIX_MIN` tokens (2048 by default) can take the slot, which is
+what keeps a short side request from evicting an agent preamble. Two different
+agents pointed at one server will still take it from each other.
 
 `QWEN38_CONTINUE_DEBUG=1` prints which checkpoint each request matched,
 `QWEN38_DUMP_PROMPT=<dir>` writes every rendered prompt and its declared prefix,
 and every request logs a time-to-first-token breakdown over restore, prefill,
 forward and checkpoint save.
+
+### opencode
+
+`tools/opencode-qwen` is the same arrangement for [opencode](https://opencode.ai):
+it brings the server up and then runs opencode against it, with
+`OPENCODE_CONFIG` pointed at `~/.config/opencode/qwen.json` so the user's normal
+config - other providers, MCP servers - is left alone and adds no tokens here.
+
+```sh
+opencode-qwen                                    # interactive
+opencode-qwen run 'fix the bug in calc.py'       # one shot
+```
+
+opencode speaks chat completions through `@ai-sdk/openai-compatible`, so
+`/v1/chat/completions` renders the template's tool block, replays assistant
+`tool_calls` and turns `role: "tool"` messages into `<tool_response>` blocks,
+exactly as the Responses path does. Its system turn is declared as the
+checkpoint prefix too. A measured edit task - read the file, patch it, verify -
+ran its eleven tools at 11.7 k prompt tokens:
+
+| Turn | Prompt tokens | Reused | Time to first token | Emitted |
+|---|---|---|---|---|
+| Session start | 11,687 | 11,650 | 2.1 s | `read` |
+| Apply the patch | 11,819 | 11,730 | 3.8 s | `edit` |
+| Verify | 11,932 | 11,819 | 4.8 s | `bash` |
+| Answer | 12,011 | 11,995 | 1.8 s | final message |
+
+opencode asks a separate ~560-token question of the `small_model` to title each
+session. Pointed at this server that costs about 9 s twice per session, and it
+resets the engine - which is what the session slot's KV mirror and prefix floor
+exist to survive. Pointing `small_model` at a different provider avoids the
+18 s but sends the titles off the machine.
 
 ### What the turn time is made of
 
