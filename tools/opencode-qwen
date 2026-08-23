@@ -12,7 +12,7 @@ repository=$(CDPATH= cd -- "$(dirname -- "$(readlink "$0" || echo "$0")")/.." \
     && pwd)
 port=${QWEN38_PORT:-8199}
 health="http://127.0.0.1:$port/health"
-log=${QWEN38_CODEX_LOG:-"$repository/tmp/qwen38-codex-serve.log"}
+log=${QWEN38_LOG:-"$repository/tmp/qwen38-serve.log"}
 config=${OPENCODE_CONFIG:-"$HOME/.config/opencode/qwen.json"}
 context=${QWEN38_CONTEXT:-32768}
 maximum_new=${QWEN38_MAX_TOKENS:-4096}
@@ -62,7 +62,7 @@ if [ -z "$running_context" ]; then
             fi
         done
     fi
-    echo "Model server ready on port $port." >&2
+    echo "Model server ready on port $port. Log: $log" >&2
 fi
 
 # Every token of prompt is paid twice on this target - once in prefill,
