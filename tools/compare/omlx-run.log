@@ -1,6 +1,0 @@
-{'case': 'code short', 'reply_tokens': 28, 'wall_s': 4.539, 'e2e_tok_s': 6.17}
-{'case': 'prose', 'reply_tokens': 474, 'wall_s': 58.348, 'e2e_tok_s': 8.12}
-{'case': 'code long', 'reply_tokens': 1154, 'wall_s': 139.059, 'e2e_tok_s': 8.3}
-{'case': 'essay', 'reply_tokens': 1510, 'wall_s': 178.607, 'e2e_tok_s': 8.45}
-{'case': 'summary', 'reply_tokens': 128, 'wall_s': 17.454, 'e2e_tok_s': 7.33}
-AGGREGATE 8.28 tok/s
