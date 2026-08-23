@@ -35,7 +35,8 @@ if [ ! -f "$HOME/.codex/qwen.config.toml" ]; then
     exit 2
 fi
 
-running_context=$(curl -sf --max-time 2 "$health" 2>/dev/null |
+probe=$(curl -sf --max-time 2 "$health" 2>/dev/null || true)
+running_context=$(printf '%s' "$probe" |
     sed -n 's/.*"context": *\([0-9]*\).*/\1/p')
 
 # A server left over from the Chatbox path runs a 4096-token context,
@@ -72,7 +73,11 @@ if [ -z "$running_context" ]; then
             fi
         done
     fi
-    echo "Model server ready on port $port. Log: $log" >&2
+    # Ask the server where it is logging rather than assuming: when we
+    # attached to one that was already running, our own path is wrong.
+    actual=$(curl -sf --max-time 2 "$health" 2>/dev/null |
+        sed -n 's/.*"log": *"\([^"]*\)".*/\1/p')
+    echo "Model server ready on port $port. Log: ${actual:-$log}" >&2
 fi
 
 exec codex -p qwen "$@"

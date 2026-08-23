@@ -275,6 +275,24 @@ def tool_manifest(table):
     return manifest
 
 
+def stdout_path():
+    """Where this process's stdout actually lands.
+
+    The launcher only knows the log path when it started the server
+    itself; attach to one that was already running and its guess is
+    wrong. Asking the file descriptor is the only answer that is right
+    in both cases. macOS fcntl F_GETPATH; anything else reports nothing
+    rather than guessing."""
+    try:
+        import fcntl
+        F_GETPATH = 50
+        raw = fcntl.fcntl(1, F_GETPATH, b"\0" * 1024)
+        resolved = raw.rstrip(b"\0").decode()
+        return resolved if os.path.isfile(resolved) else ""
+    except (OSError, ValueError, ImportError):
+        return ""
+
+
 def strip_blocks(text):
     """Drop configured <block>...</block> spans from a Codex message.
 
@@ -619,6 +637,7 @@ RESPONSES_HONOR_EFFORT = os.environ.get(
 # Set to a directory to write each rendered prompt and its
 # declared prefix, for checking what varies between sessions.
 PROMPT_DUMP = os.environ.get("QWEN38_DUMP_PROMPT", "")
+LOG_PATH = ""
 STRIP_BLOCKS = [name for name in os.environ.get(
     "QWEN38_STRIP_BLOCKS", "recommended_plugins").split(",") if name.strip()]
 
@@ -663,7 +682,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"status": "ok", "model": MODEL_ID,
                             "context": ready.get("context"),
                             "max_new": ready.get("max_new"),
-                            "thinking": THINKING_DEFAULT})
+                            "thinking": THINKING_DEFAULT,
+                            "log": LOG_PATH})
         else:
             self.send_json({"error": "not found"}, 404)
 
@@ -1125,7 +1145,8 @@ def main():
                         default=int(os.environ.get("QWEN38_SEED", 42)))
     arguments = parser.parse_args()
 
-    global ENGINE, THINKING_DEFAULT, EFFORT_DEFAULT
+    global ENGINE, THINKING_DEFAULT, EFFORT_DEFAULT, LOG_PATH
+    LOG_PATH = stdout_path()
     THINKING_DEFAULT = bool(arguments.thinking)
     EFFORT_DEFAULT = arguments.reasoning_effort
     ENGINE = Engine(arguments)
@@ -1148,7 +1169,8 @@ def main():
                                  Handler)
     print(f"serving OpenAI-compatible API at "
           f"http://{arguments.host}:{arguments.port}/v1 "
-          f"(model id '{MODEL_ID}')", flush=True)
+          f"(model id '{MODEL_ID}')"
+          f"{'; logging to ' + LOG_PATH if LOG_PATH else ''}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
