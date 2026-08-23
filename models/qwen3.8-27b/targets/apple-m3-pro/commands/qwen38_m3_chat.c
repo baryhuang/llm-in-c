@@ -62,6 +62,16 @@ static char *trim_prompt(const char *prompt) {
     return trimmed;
 }
 
+/* Prefill the half-open token span [from, to) at its own positions. */
+static int prefill_span(qwen38_m3_model *model, const uint32_t *ids,
+                        uint32_t from, uint32_t to, char *error,
+                        size_t error_capacity) {
+    if (to <= from) return 0;
+    qwen38_m3_prefill_result prefill;
+    return qwen38_m3_model_prefill(model, ids + from, to - from, from,
+                                   &prefill, error, error_capacity);
+}
+
 static char *render_chat(const char *prompt) {
     static const char prefix[] = "<|im_start|>user\n";
     static const char suffix[] =
@@ -190,9 +200,14 @@ static char *decode_json_string(const char *line) {
  * per-request sampling and budget:
  *   {"prompt": "...", "temperature": 0.7, "top_k": 20, "top_p": 0.8,
  *    "min_p": 0.0, "presence_penalty": 1.5, "max_new": 512}
+ * "prefix" optionally names a leading span of "prompt" that the caller
+ * expects to repeat across conversations - an agent front end's system
+ * turn, say - so the engine can keep a checkpoint at that boundary and
+ * skip re-prefilling it when a new conversation starts.
  * Unknown keys are ignored. */
 typedef struct {
     char *chat;
+    char *prefix;
     float temperature;
     uint32_t top_k;
     float top_p;
@@ -221,6 +236,9 @@ static int parse_request_object(const char *line, chat_request *request) {
             if (strcmp(key, "prompt") == 0) {
                 free(request->chat);
                 request->chat = value;
+            } else if (strcmp(key, "prefix") == 0) {
+                free(request->prefix);
+                request->prefix = value;
             } else {
                 free(value);
             }
@@ -417,6 +435,19 @@ int main(int argc, char **argv) {
     uint32_t *snapshot_tokens = malloc((size_t)capacity *
                                        sizeof(*snapshot_tokens));
     uint32_t snapshot_count = 0;
+    /* System-prefix checkpoint: the span a caller declares as stable
+     * across conversations. The turn checkpoint above only ever holds
+     * the conversation in flight, so a new session shares nothing with
+     * it past the system turn and pays a full prefill; this slot is
+     * what makes that first turn cheap. Valid only while no prefill has
+     * started below system_count, which would overwrite the attention
+     * KV the restore depends on. */
+    uint32_t *system_tokens = malloc((size_t)capacity *
+                                     sizeof(*system_tokens));
+    uint32_t *prefix_ids = malloc((size_t)capacity *
+                                  sizeof(*prefix_ids));
+    uint32_t system_count = 0;
+    int system_valid = 0;
     const char *continue_env = getenv("QWEN38_CONTINUE");
     int continuation = continue_env == NULL ||
                        strcmp(continue_env, "0") != 0;
@@ -424,7 +455,8 @@ int main(int argc, char **argv) {
     char *line = NULL;
     size_t line_capacity = 0;
     if (prompt_ids == NULL || generated == NULL || history == NULL ||
-        snapshot_tokens == NULL) {
+        snapshot_tokens == NULL || system_tokens == NULL ||
+        prefix_ids == NULL) {
         fprintf(stderr, "cannot allocate buffers\n");
         return 6;
     }
@@ -441,7 +473,8 @@ int main(int argc, char **argv) {
         }
         char *chat = NULL;
         chat_request request = {
-            .chat = NULL, .temperature = temperature, .top_k = top_k,
+            .chat = NULL, .prefix = NULL,
+            .temperature = temperature, .top_k = top_k,
             .top_p = 0.0f, .min_p = 0.0f, .presence_penalty = 0.0f,
             .max_new = 0
         };
@@ -454,6 +487,7 @@ int main(int argc, char **argv) {
             if (*scan == '{') {
                 if (parse_request_object(line, &request) != 0) {
                     free(request.chat);
+                    free(request.prefix);
                     printf("X \"invalid request object\"\n");
                     fflush(stdout);
                     continue;
@@ -498,9 +532,32 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "prompt encode failed: %s\n", reason);
             }
             free(chat);
+            free(request.prefix);
             continue;
         }
         free(chat);
+        /* Tokenize the declared prefix and require it to be a token
+         * prefix of the prompt. BPE need not split a substring the same
+         * way, and a mismatched span would restore GDN state that does
+         * not belong to these tokens, so a failed check simply drops
+         * back to the ordinary paths. */
+        uint32_t prefix_count = 0;
+        if (request.prefix != NULL && continuation) {
+            size_t encoded = 0;
+            if (qwen38_tokenizer_encode(tokenizer, request.prefix,
+                                        prefix_ids, capacity, &encoded,
+                                        error, sizeof(error)) == 0 &&
+                encoded != 0 && encoded < prompt_count &&
+                memcmp(prompt_ids, prefix_ids,
+                       encoded * sizeof(uint32_t)) == 0) {
+                prefix_count = (uint32_t)encoded;
+            } else if (getenv("QWEN38_CONTINUE_DEBUG") != NULL) {
+                fprintf(stderr, "[continue] declared prefix is not a "
+                        "token prefix of the prompt; ignored\n");
+            }
+        }
+        free(request.prefix);
+        request.prefix = NULL;
         if (prompt_count + 1 > capacity) {
             if (machine) {
                 printf("X \"prompt (%zu tokens) exceeds context %u\"\n",
@@ -542,14 +599,29 @@ int main(int argc, char **argv) {
              * GDN state and prefill the reply plus the new turn. */
             start_position = snapshot_count;
             history_count = 0;
+        } else if (continuation && system_valid && system_count != 0 &&
+                   prompt_count > system_count &&
+                   memcmp(prompt_ids, system_tokens,
+                          (size_t)system_count * sizeof(uint32_t)) == 0 &&
+                   qwen38_m3_model_prefix_restore_slot(
+                       model, QWEN38_M3_PREFIX_SYSTEM, error,
+                       sizeof(error)) == 0) {
+            /* A new conversation that opens with the same system turn:
+             * rewind to that boundary instead of prefilling it again. */
+            start_position = system_count;
+            history_count = 0;
         } else {
             if (getenv("QWEN38_CONTINUE_DEBUG") != NULL &&
                 history_count != 0)
                 fprintf(stderr, "[continue] no match: history %u "
-                        "snapshot %u prompt %zu\n", history_count,
-                        snapshot_count, prompt_count);
+                        "snapshot %u system %u prompt %zu\n",
+                        history_count, snapshot_count, system_count,
+                        prompt_count);
+            /* Reset zeroes the attention KV, so the system checkpoint's
+             * keys and values go with it. */
             qwen38_m3_model_reset(model);
             history_count = 0;
+            system_valid = 0;
         }
         if (getenv("QWEN38_CONTINUE_DEBUG") != NULL)
             fprintf(stderr, "[continue] prefill from %u of %zu\n",
@@ -558,13 +630,35 @@ int main(int argc, char **argv) {
         size_t logit_count = 0;
         qwen38_m3_decode_result result = {0};
         int failed = 0;
-        if (prompt_count - 1 > start_position) {
-            qwen38_m3_prefill_result prefill;
-            if (qwen38_m3_model_prefill(
-                    model, prompt_ids + start_position,
-                    (uint32_t)(prompt_count - 1 - start_position),
-                    start_position, &prefill, error,
-                    sizeof(error)) != 0) {
+        uint32_t prefill_end = (uint32_t)(prompt_count - 1);
+        if (prefill_end > start_position) {
+            /* Prefilling from zero with a declared prefix stops at that
+             * boundary to take the checkpoint, then continues. The only
+             * cost is one partly filled prompt chunk at the seam. */
+            uint32_t boundary = start_position;
+            if (start_position == 0 && prefix_count != 0 &&
+                prefix_count < prefill_end)
+                boundary = prefix_count;
+            if (prefill_span(model, prompt_ids, start_position, boundary,
+                             error, sizeof(error)) != 0) {
+                fprintf(stderr, "prefill failed: %s\n", error);
+                failed = 1;
+            }
+            if (!failed && boundary != start_position) {
+                if (qwen38_m3_model_prefix_save_slot(
+                        model, QWEN38_M3_PREFIX_SYSTEM, error,
+                        sizeof(error)) == 0) {
+                    memcpy(system_tokens, prompt_ids,
+                           (size_t)boundary * sizeof(uint32_t));
+                    system_count = boundary;
+                    system_valid = 1;
+                } else {
+                    system_valid = 0;
+                }
+            }
+            if (!failed && prefill_span(model, prompt_ids, boundary,
+                                        prefill_end, error,
+                                        sizeof(error)) != 0) {
                 fprintf(stderr, "prefill failed: %s\n", error);
                 failed = 1;
             }
@@ -579,6 +673,7 @@ int main(int argc, char **argv) {
         if (failed) {
             qwen38_m3_model_reset(model);
             history_count = 0;
+            system_valid = 0;
             continue;
         }
         memcpy(history, prompt_ids,

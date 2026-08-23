@@ -268,7 +268,12 @@ def render_responses_template(request, table, thinking, effort):
     turn, ahead of the tool block. Assistant/function_call items replay as
     assistant turns and function_call_output items as <tool_response>
     blocks, so each Codex turn is an exact token extension of the previous
-    one and the resident engine prefills only the new suffix."""
+    one and the resident engine prefills only the new suffix.
+
+    Returns (prompt, system turn). The system turn is declared to the
+    engine as a reusable prefix: it is identical for every Codex session
+    in a workspace, so the engine keeps a checkpoint at that boundary
+    and a new session no longer re-prefills it."""
     reasoning = REASONING_EFFORT_TEXT.get(effort) if thinking else None
     items = list(request.get("input") or [])
 
@@ -303,9 +308,19 @@ def render_responses_template(request, table, thinking, effort):
     head.extend(part for part in developer if part)
 
     parts = []
+    system_turn = ""
     if head:
-        parts.append("<|im_start|>system\n" + "\n\n".join(head) +
-                     "<|im_end|>\n")
+        system_turn = ("<|im_start|>system\n" + "\n\n".join(head) +
+                       "<|im_end|>\n")
+        parts.append(system_turn)
+
+    opening = not any(
+        isinstance(item, dict) and
+        (item.get("type") in ("function_call", "function_call_output",
+                              "custom_tool_call_output") or
+         (item.get("type", "message") == "message" and
+          item.get("role") == "assistant"))
+        for item in items)
 
     # Consecutive function_call items share one assistant turn and
     # consecutive outputs share one user turn, matching the template.
@@ -358,7 +373,19 @@ def render_responses_template(request, table, thinking, effort):
         parts.append("<|im_start|>assistant\n<think>\n")
     else:
         parts.append("<|im_start|>assistant\n<think>\n\n</think>\n\n")
-    return "".join(parts)
+
+    # The checkpoint prefix is the span that repeats verbatim in every
+    # session for this workspace. The system turn always qualifies. On an
+    # opening turn - no assistant or tool traffic yet - the turns before
+    # the user's own prompt are Codex's preamble (recommended plugins,
+    # environment context), which repeats too and is worth another two
+    # thousand tokens. Later turns must not extend the prefix: the
+    # conversation in flight belongs to the turn checkpoint, and writing
+    # it here would make the slot session-specific.
+    prefix = system_turn
+    if opening and len(parts) > 2:
+        prefix = "".join(parts[:-2])
+    return "".join(parts), prefix
 
 
 def coerce_argument(text, schema):
@@ -469,14 +496,20 @@ class Engine:
         print(f"model ready: context {self.ready.get('context')}, "
               f"max reply {self.ready.get('max_new')} tokens", flush=True)
 
-    def generate(self, rendered, on_delta, sampling=None):
-        """Run one request; call on_delta(text) per chunk; return stats."""
+    def generate(self, rendered, on_delta, sampling=None, prefix=None):
+        """Run one request; call on_delta(text) per chunk; return stats.
+
+        `prefix` names a leading span of `rendered` that the caller
+        expects to repeat across conversations; the engine keeps a
+        checkpoint there and skips re-prefilling it."""
         with self.lock:
             if self.process.poll() is not None:
                 self.start()
-            if sampling:
-                request = dict(sampling)
+            if sampling or prefix:
+                request = dict(sampling or {})
                 request["prompt"] = rendered
+                if prefix:
+                    request["prefix"] = prefix
                 self.process.stdin.write(json.dumps(request) + "\n")
             else:
                 self.process.stdin.write(json.dumps(rendered) + "\n")
@@ -498,6 +531,9 @@ THINKING_DEFAULT = False
 EFFORT_DEFAULT = "xhigh"
 RESPONSES_HONOR_EFFORT = os.environ.get(
     "QWEN38_RESPONSES_EFFORT", "") not in ("", "0")
+# Set to a directory to write each rendered prompt and its
+# declared prefix, for checking what varies between sessions.
+PROMPT_DUMP = os.environ.get("QWEN38_DUMP_PROMPT", "")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -644,7 +680,8 @@ class Handler(BaseHTTPRequestHandler):
                 effort = "low" if level == "low" else \
                     ("medium" if level == "medium" else "xhigh")
         table = flatten_tools(request.get("tools"))
-        rendered = render_responses_template(request, table, thinking, effort)
+        rendered, system_turn = render_responses_template(
+            request, table, thinking, effort)
         sampling = {}
         budget = request.get("max_output_tokens")
         if isinstance(budget, int) and not isinstance(budget, bool):
@@ -653,10 +690,10 @@ class Handler(BaseHTTPRequestHandler):
         created = int(time.time())
         if request.get("stream", True):
             self.stream_responses(rendered, table, identifier, created,
-                                  sampling, thinking)
+                                  sampling, thinking, system_turn)
         else:
             self.plain_responses(rendered, table, identifier, created,
-                                 sampling, thinking)
+                                 sampling, thinking, system_turn)
 
     def responses_envelope(self, identifier, created, status, output=None,
                            stats=None):
@@ -695,10 +732,11 @@ class Handler(BaseHTTPRequestHandler):
         return output
 
     def plain_responses(self, rendered, table, identifier, created,
-                        sampling, thinking):
+                        sampling, thinking, prefix=None):
         chunks = []
         try:
-            stats = ENGINE.generate(rendered, chunks.append, sampling)
+            stats = ENGINE.generate(rendered, chunks.append, sampling,
+                                    prefix)
         except RuntimeError as failure:
             self.send_json({"error": {"message": str(failure),
                                       "type": "server_error"}}, 500)
@@ -713,7 +751,7 @@ class Handler(BaseHTTPRequestHandler):
                                                "completed", output, stats))
 
     def stream_responses(self, rendered, table, identifier, created,
-                         sampling, thinking):
+                         sampling, thinking, prefix=None):
         self.sse_open()
         message_id = f"msg_{identifier[5:]}"
         try:
@@ -748,7 +786,14 @@ class Handler(BaseHTTPRequestHandler):
                     "item_id": message_id, "output_index": 0,
                     "content_index": 0, "delta": visible})
 
-            stats = ENGINE.generate(rendered, deliver, sampling)
+            if PROMPT_DUMP:
+                with open(os.path.join(PROMPT_DUMP,
+                                       f"{identifier}.prompt"), "w") as f:
+                    f.write(rendered)
+                with open(os.path.join(PROMPT_DUMP,
+                                       f"{identifier}.prefix"), "w") as f:
+                    f.write(prefix or "")
+            stats = ENGINE.generate(rendered, deliver, sampling, prefix)
             tail = think.flush()
             if tail and think.done:
                 answer.append(tail)

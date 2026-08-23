@@ -128,18 +128,49 @@ assistant turns, and `function_call_output` items become `<tool_response>`
 blocks. Each Codex turn is therefore an exact token extension of the previous
 one, and the engine's conversation continuation prefills only the new suffix.
 
-| Turn | Prompt tokens | Reused | Time to first token |
+That covers turns inside one session. A new session shares nothing with the
+conversation the turn checkpoint holds, so it used to re-prefill the whole
+10.4 k-token preamble. The shim therefore also declares a `prefix` with each
+request - the span it knows repeats verbatim in every session for this
+workspace - and the runtime keeps a second checkpoint slot there. See
+[Prefix state reuse](../../../../ARCHITECTURE.md#prefix-state-reuse) for why
+that has to live in the runtime.
+
+On an opening turn the declared prefix is the system turn plus Codex's own
+preamble (recommended plugins, environment context), which is 10,399 of the
+10,416 tokens; only the user's sentence is new. Later turns declare just the
+system turn, because the conversation in flight belongs to the turn checkpoint
+and writing it into the session slot would make that slot session-specific.
+
+Starting a session:
+
+| Session | Prompt tokens | Reused | Time to first token |
 |---|---|---|---|
-| Cold session start | 10,416 | 0 | 234.9 s |
-| Tool result returned | 11,249 | 10,915 | 11.6 s |
-| Second tool result | 11,380 | 11,249 | 5.1 s |
-| Final answer | 11,482 | 11,428 | 2.9 s |
+| First after the model loads | 10,416 | 0 | 235.5 s |
+| Second, same workspace | 10,416 | 10,399 | 1.7 s |
+| Third | 10,416 | 10,399 | 1.8 s |
+
+A complete edit task in one of those sessions - fix a function that subtracts
+where it should add - with both checkpoints in play:
+
+| Turn | Prompt tokens | Reused | Time to first token | Emitted |
+|---|---|---|---|---|
+| Read the file | 10,439 | 10,399 | 3.4 s | `exec_command` |
+| Apply the patch | 10,536 | 10,467 | 2.9 s | `exec_command` |
+| Verify | 10,667 | 10,536 | 4.9 s | `exec_command` |
+| Answer | 10,765 | 10,698 | 3.0 s | final message |
 
 Measured on the pinned machine with `QWEN38_CONTEXT=32768`, decoding at
-12-23 tok/s. The cold turn is prefill-bound at roughly 44 tok/s, so it is paid
-once per session; every later turn costs only its own new tokens. A four-turn
-edit task - read the file, patch it, verify, answer - completed in about five
-minutes, four of which were that first prefill.
+12-23 tok/s. The cold turn is prefill-bound at roughly 44 tok/s. It is now paid
+once per server, not once per session: the first `codex-qwen` after the model
+loads waits about four minutes, and every session after it starts in under two
+seconds. Anything that resets the engine - a different system turn, a chat
+completions request, a context overflow - gives up the slot and the next
+session pays the cold prefill again.
+
+`QWEN38_CONTINUE_DEBUG=1` prints which checkpoint each request matched, and
+`QWEN38_DUMP_PROMPT=<dir>` writes every rendered prompt and its declared prefix,
+which is how to check what actually varies between sessions.
 
 The profile exists to keep that first prefill survivable. A stock Codex turn
 sends about 60,000 tokens of tool schema alone (GitHub 76 KB, Gmail 33 KB and

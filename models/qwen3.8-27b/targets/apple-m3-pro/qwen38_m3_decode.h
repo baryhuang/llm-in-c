@@ -133,11 +133,46 @@ void qwen38_m3_model_mtp_context(
     const uint32_t *tokens,
     uint32_t count);
 
-/* Prompt-boundary conversation checkpoint: save copies the cumulative
- * GDN recurrent/convolution states (the attention KV cache is
- * per-position and needs no copy); restore rewinds to that point so a
- * follow-up request that extends the saved prompt can prefill only its
- * new suffix. One checkpoint slot; saving again overwrites it. */
+/* Conversation checkpoints: save copies the cumulative GDN
+ * recurrent/convolution states (the attention KV cache is per-position
+ * and needs no copy); restore rewinds to that point so a request that
+ * extends the saved prefix can prefill only its new suffix.
+ *
+ * Two slots, because two different prefixes are worth keeping:
+ *
+ *   QWEN38_M3_PREFIX_TURN    the last prompt boundary, rewritten every
+ *                            request, which serves follow-up turns of
+ *                            the conversation in flight.
+ *   QWEN38_M3_PREFIX_SYSTEM  a caller-declared prefix that outlives the
+ *                            conversation - for an agent front end, the
+ *                            system turn holding its instructions and
+ *                            tool schemas, which is identical across
+ *                            sessions and is otherwise re-prefilled from
+ *                            scratch every time one starts.
+ *
+ * Restoring only rewinds GDN state. The attention KV below the restore
+ * position must still hold that prefix's keys and values, so a restore
+ * is valid only while nothing has prefilled from an earlier position;
+ * qwen38_m3_model_reset zeroes the caches and invalidates both slots. */
+enum {
+    QWEN38_M3_PREFIX_TURN = 0,
+    QWEN38_M3_PREFIX_SYSTEM = 1,
+    QWEN38_M3_PREFIX_SLOTS = 2
+};
+
+int qwen38_m3_model_prefix_save_slot(
+    qwen38_m3_model *model,
+    uint32_t slot,
+    char *error_message,
+    size_t error_message_capacity);
+
+int qwen38_m3_model_prefix_restore_slot(
+    qwen38_m3_model *model,
+    uint32_t slot,
+    char *error_message,
+    size_t error_message_capacity);
+
+/* QWEN38_M3_PREFIX_TURN shorthands. */
 int qwen38_m3_model_prefix_save(
     qwen38_m3_model *model,
     char *error_message,

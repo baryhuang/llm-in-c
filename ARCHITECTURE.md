@@ -71,6 +71,52 @@ The current Gemma 4 artifact is more restricted: it stores twelve complete token
 
 Task outputs are defined by the prompt at run time, not by the compiled artifact. The default runtime carries the tokenizer and the full output head, accepts a prompt and an optional per-invocation set of allowed answers, and scores only the requested answer rows after prefill; with no answer set it generates tokens normally. A fixed compiled-in label set — including the binary one-bit case with the `W_1 - W_0` decision-only rewrite — is an optional restricted specialization for extreme targets, not the contract. The first Gemma 4 artifact is such a special case.
 
+## Prefix state reuse
+
+Bounded-input specialization precomputes fixed-prefix state offline, when the
+prefix is known to the compiler. An agent front end does not offer that: its
+fixed prefix is the system turn holding instructions and tool schemas, it is
+assembled by the client, and it arrives only with the request. The same lever
+applies at run time if the runtime can checkpoint and rewind its own state.
+
+Two properties put this in the runtime rather than in a serving layer.
+
+First, the state that must be rewound is not uniformly indexable. A hybrid
+model mixes per-position attention KV with cumulative recurrent state:
+Qwen3.8-27B has sixteen full-attention layers and forty-eight DeltaNet layers.
+Position-indexed KV prefix caching, the standard serving technique, covers only
+the attention half. The recurrent and convolution state at position `n` is a
+cumulative function of every earlier token; it cannot be addressed or truncated
+by position, only copied. A checkpoint is therefore a copy of layer-internal
+buffers, which requires owning the layer implementation.
+
+Second, which prefix is worth keeping is an application fact, not a property of
+the token stream. Nothing in the request tells an engine that one span will
+recur across otherwise unrelated conversations. The caller declares the span,
+the runtime verifies it is a token prefix of the prompt — a substring need not
+tokenize the same way in isolation — and keeps a slot for it.
+
+The Apple M3 Pro Qwen3.8 target keeps two slots. The turn slot is rewritten at
+every prompt boundary and serves follow-up turns of the conversation in flight.
+The system slot holds the declared prefix and outlives the conversation, so a
+new session restores it instead of prefilling instructions and tool schemas
+again. Measured against Codex CLI, whose fixed preamble is 10.4 k tokens: the
+first session after the model loads prefills it in 235.5 s, and later sessions
+in the same workspace restore 10,399 of those tokens and reach first token in
+1.7 s. Turns inside a session hit the turn slot and cost 2.9-4.9 s.
+
+The correctness condition is narrow and stated explicitly. Restore rewinds only
+the GDN state; the attention KV below the restore position must still hold that
+prefix's keys and values. That holds while no prefill has started below the
+boundary, and `qwen38_m3_model_reset` zeroes the caches and invalidates both
+slots. Making that argument requires knowing that the target's prefill only
+ever writes forward from its start position, which is a property of this
+runtime and not an assumption available about a general engine.
+
+The cost is one state copy per slot — 158.9 MB of recurrent and convolution
+state, with the KV cache deliberately not copied — and one partly filled prompt
+chunk at the seam where prefill stops to take the checkpoint.
+
 ## Model-adapter requirements
 
 - verify tensor names, shapes, data types, and hashes;

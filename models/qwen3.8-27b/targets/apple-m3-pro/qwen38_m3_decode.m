@@ -285,8 +285,8 @@ enum {
     id<MTLBuffer> ckpt_value;
     id<MTLBuffer> ckpt_decay;
     id<MTLBuffer> ckpt_beta;
-    id<MTLBuffer> prefix_recurrent;
-    id<MTLBuffer> prefix_convolution;
+    id<MTLBuffer> prefix_recurrent[QWEN38_M3_PREFIX_SLOTS];
+    id<MTLBuffer> prefix_convolution[QWEN38_M3_PREFIX_SLOTS];
     id<MTLBuffer> p_token_ids;
     id<MTLBuffer> p_hidden_half;
     id<MTLBuffer> p_normalized;
@@ -2227,10 +2227,11 @@ static int rollback_to_accept(qwen38_m3_model *model, uint32_t rows,
  * follow-up request that extends a previous prompt restores this
  * checkpoint and prefills only the new suffix. Buffers allocate on
  * first save. */
-static int prefix_state_copy(qwen38_m3_model *model, int restore,
-                             char *error_message,
+static int prefix_state_copy(qwen38_m3_model *model, uint32_t slot,
+                             int restore, char *error_message,
                              size_t error_message_capacity) {
-    if (model == NULL || model->runtime == NULL) {
+    if (model == NULL || model->runtime == NULL ||
+        slot >= QWEN38_M3_PREFIX_SLOTS) {
         decode_error(error_message, error_message_capacity,
                      @"invalid prefix state arguments");
         return 1;
@@ -2241,7 +2242,7 @@ static int prefix_state_copy(qwen38_m3_model *model, int restore,
                      @"a decode forward is in flight");
         return 1;
     }
-    if (r->prefix_recurrent == nil) {
+    if (r->prefix_recurrent[slot] == nil) {
         if (restore) {
             decode_error(error_message, error_message_capacity,
                          @"no prefix state saved");
@@ -2254,14 +2255,14 @@ static int prefix_state_copy(qwen38_m3_model *model, int restore,
             recurrent_total += layer->recurrent_state.length;
             convolution_total += layer->convolution_state.length;
         }
-        r->prefix_recurrent = [r->device
+        r->prefix_recurrent[slot] = [r->device
             newBufferWithLength:recurrent_total
                         options:MTLResourceStorageModeShared];
-        r->prefix_convolution = [r->device
+        r->prefix_convolution[slot] = [r->device
             newBufferWithLength:convolution_total
                         options:MTLResourceStorageModeShared];
-        if (r->prefix_recurrent == nil ||
-            r->prefix_convolution == nil) {
+        if (r->prefix_recurrent[slot] == nil ||
+            r->prefix_convolution[slot] == nil) {
             decode_error(error_message, error_message_capacity,
                          @"cannot allocate prefix state");
             return 2;
@@ -2275,12 +2276,12 @@ static int prefix_state_copy(qwen38_m3_model *model, int restore,
         for (Q38DecodeLayer *layer in r->layers) {
             if (layer->attention) continue;
             if (restore) {
-                [blit copyFromBuffer:r->prefix_recurrent
+                [blit copyFromBuffer:r->prefix_recurrent[slot]
                         sourceOffset:recurrent_offset
                             toBuffer:layer->recurrent_state
                    destinationOffset:0
                                 size:layer->recurrent_state.length];
-                [blit copyFromBuffer:r->prefix_convolution
+                [blit copyFromBuffer:r->prefix_convolution[slot]
                         sourceOffset:convolution_offset
                             toBuffer:layer->convolution_state
                    destinationOffset:0
@@ -2288,12 +2289,12 @@ static int prefix_state_copy(qwen38_m3_model *model, int restore,
             } else {
                 [blit copyFromBuffer:layer->recurrent_state
                         sourceOffset:0
-                            toBuffer:r->prefix_recurrent
+                            toBuffer:r->prefix_recurrent[slot]
                    destinationOffset:recurrent_offset
                                 size:layer->recurrent_state.length];
                 [blit copyFromBuffer:layer->convolution_state
                         sourceOffset:0
-                            toBuffer:r->prefix_convolution
+                            toBuffer:r->prefix_convolution[slot]
                    destinationOffset:convolution_offset
                                 size:layer->convolution_state.length];
             }
@@ -2312,18 +2313,36 @@ static int prefix_state_copy(qwen38_m3_model *model, int restore,
     return 0;
 }
 
+int qwen38_m3_model_prefix_save_slot(qwen38_m3_model *model,
+                                     uint32_t slot,
+                                     char *error_message,
+                                     size_t error_message_capacity) {
+    return prefix_state_copy(model, slot, 0, error_message,
+                             error_message_capacity);
+}
+
+int qwen38_m3_model_prefix_restore_slot(qwen38_m3_model *model,
+                                        uint32_t slot,
+                                        char *error_message,
+                                        size_t error_message_capacity) {
+    return prefix_state_copy(model, slot, 1, error_message,
+                             error_message_capacity);
+}
+
 int qwen38_m3_model_prefix_save(qwen38_m3_model *model,
                                 char *error_message,
                                 size_t error_message_capacity) {
-    return prefix_state_copy(model, 0, error_message,
-                             error_message_capacity);
+    return qwen38_m3_model_prefix_save_slot(
+        model, QWEN38_M3_PREFIX_TURN, error_message,
+        error_message_capacity);
 }
 
 int qwen38_m3_model_prefix_restore(qwen38_m3_model *model,
                                    char *error_message,
                                    size_t error_message_capacity) {
-    return prefix_state_copy(model, 1, error_message,
-                             error_message_capacity);
+    return qwen38_m3_model_prefix_restore_slot(
+        model, QWEN38_M3_PREFIX_TURN, error_message,
+        error_message_capacity);
 }
 
 static uint32_t argmax_f32(const float *values, uint32_t count) {
