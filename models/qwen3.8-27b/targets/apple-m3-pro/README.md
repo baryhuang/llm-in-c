@@ -98,6 +98,61 @@ QWEN38_MODEL_DIR=/path/to/qwen38-runtime tools/qwen38_serve.py
 
 The server accepts standard sampling fields. `reasoning_effort` values `low`, `medium` and `xhigh` enable thinking mode; `none` selects the no-thinking template. Streaming responses separate reasoning into `reasoning_content` and the final answer into `content`. The Python process implements only HTTP and template adaptation; inference stays inside the resident C/Metal process.
 
+## Codex CLI
+
+`tools/codex-qwen` runs the OpenAI Codex CLI against this runtime instead of a
+hosted model. It starts the server if needed and then execs
+`codex -p qwen`, which layers `~/.codex/qwen.config.toml` over the user
+config. Every argument is forwarded, so `codex-qwen`, `codex-qwen exec '...'`
+and `codex-qwen resume --last` all work.
+
+```sh
+codex-qwen                                    # interactive
+codex-qwen exec 'fix the bug in calc.py'      # one shot
+```
+
+Codex 0.149 dropped `wire_api = "chat"` and speaks only the Responses API, so
+`qwen38_serve.py` also serves `POST /v1/responses`. The shim renders a
+Responses request into the same Qwen3.8 chat template - including the
+template's own `<tool_call><function=...><parameter=...>` block - and turns
+the reply back into the SSE events Codex consumes: `response.created`,
+`response.output_text.delta`, `response.reasoning_text.delta`,
+`response.output_item.added`/`.done` and `response.completed`. Codex ignores
+`response.function_call_arguments.delta`, so each tool call is delivered whole
+in one `output_item.done` carrying a `function_call` item. Both APIs share one
+resident engine, so Chatbox and Codex can point at the same server.
+
+Rendering is deliberately append-only: instructions and leading developer
+messages become the system turn, assistant and `function_call` items replay as
+assistant turns, and `function_call_output` items become `<tool_response>`
+blocks. Each Codex turn is therefore an exact token extension of the previous
+one, and the engine's conversation continuation prefills only the new suffix.
+
+| Turn | Prompt tokens | Reused | Time to first token |
+|---|---|---|---|
+| Cold session start | 10,416 | 0 | 234.9 s |
+| Tool result returned | 11,249 | 10,915 | 11.6 s |
+| Second tool result | 11,380 | 11,249 | 5.1 s |
+| Final answer | 11,482 | 11,428 | 2.9 s |
+
+Measured on the pinned machine with `QWEN38_CONTEXT=32768`, decoding at
+12-23 tok/s. The cold turn is prefill-bound at roughly 44 tok/s, so it is paid
+once per session; every later turn costs only its own new tokens. A four-turn
+edit task - read the file, patch it, verify, answer - completed in about five
+minutes, four of which were that first prefill.
+
+The profile exists to keep that first prefill survivable. A stock Codex turn
+sends about 60,000 tokens of tool schema alone (GitHub 76 KB, Gmail 33 KB and
+Sites 30 KB of JSON), so `~/.codex/qwen.config.toml` disables apps, plugins,
+MCP servers, web search and subagents, leaving 12 tools and 10.4 k tokens. It
+also sets `model_context_window` and `model_auto_compact_token_limit` so Codex
+compacts before the runtime refuses the prompt, and a 15-minute
+`stream_idle_timeout_ms` because a cold prefill outlasts the default.
+
+Thinking is off by default: at this token rate a reasoning block per tool call
+is not affordable. Set `QWEN38_RESPONSES_EFFORT=1` on the server to honor the
+request's `reasoning.effort` instead.
+
 ## Verification
 
 Verification is separate from timed benchmarking.

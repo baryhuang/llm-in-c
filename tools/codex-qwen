@@ -1,0 +1,78 @@
+#!/bin/sh
+# Codex CLI driven by the local Qwen3.8-27B C/Metal runtime.
+#
+# Brings up the OpenAI-compatible server (one resident engine, one
+# 14 GB weight wiring) if it is not already serving a large enough
+# context, then runs `codex -p qwen`, which layers
+# ~/.codex/qwen.config.toml over the user config. Every argument is
+# forwarded to codex, so `codex-qwen`, `codex-qwen exec "..."` and
+# `codex-qwen resume --last` all work.
+set -eu
+
+repository=$(CDPATH= cd -- "$(dirname -- "$(readlink "$0" || echo "$0")")/.." \
+    && pwd)
+port=${QWEN38_PORT:-8199}
+health="http://127.0.0.1:$port/health"
+log=${QWEN38_CODEX_LOG:-"$repository/tmp/qwen38-codex-serve.log"}
+
+# Codex sends its whole tool and instruction preamble on every turn, so
+# the context has to hold that plus the conversation. FP16 KV costs
+# 64 KiB per token: 32768 tokens is 2 GB on top of the 15.1 GB image.
+context=${QWEN38_CONTEXT:-32768}
+maximum_new=${QWEN38_MAX_TOKENS:-4096}
+
+if [ ! -f "$repository/tools/qwen38_serve.py" ]; then
+    echo "codex-qwen: cannot locate the cpullama checkout from $0" >&2
+    exit 2
+fi
+if ! command -v codex > /dev/null 2>&1; then
+    echo "codex-qwen: the codex CLI is not on PATH" >&2
+    exit 2
+fi
+if [ ! -f "$HOME/.codex/qwen.config.toml" ]; then
+    echo "codex-qwen: ~/.codex/qwen.config.toml is missing; see" \
+         "$repository/models/qwen3.8-27b/targets/apple-m3-pro/README.md" >&2
+    exit 2
+fi
+
+running_context=$(curl -sf --max-time 2 "$health" 2>/dev/null |
+    sed -n 's/.*"context": *\([0-9]*\).*/\1/p')
+
+# A server left over from the Chatbox path runs a 4096-token context,
+# which cannot hold a single Codex turn. Restart it rather than letting
+# the first request fail at the runtime.
+if [ -n "$running_context" ] && [ "$running_context" -lt "$context" ]; then
+    echo "Restarting the model server: context $running_context is" \
+         "smaller than $context." >&2
+    pkill -f qwen38_serve.py 2>/dev/null || true
+    pkill -x qwen38-m3-chat 2>/dev/null || true
+    waited=0
+    while pgrep -f qwen38_serve.py > /dev/null 2>&1; do
+        sleep 1
+        waited=$((waited + 1))
+        [ "$waited" -ge 15 ] && break
+    done
+    running_context=""
+fi
+
+if [ -z "$running_context" ]; then
+    if ! curl -sf --max-time 2 "$health" > /dev/null 2>&1; then
+        echo "Starting Qwen3.8-27B (context $context, one-time weight" \
+             "wiring, ~10 s)..." >&2
+        QWEN38_CONTEXT="$context" QWEN38_MAX_TOKENS="$maximum_new" \
+            nohup python3 "$repository/tools/qwen38_serve.py" \
+                --port "$port" >> "$log" 2>&1 &
+        waited=0
+        until curl -sf --max-time 2 "$health" > /dev/null 2>&1; do
+            sleep 1
+            waited=$((waited + 1))
+            if [ "$waited" -ge 180 ]; then
+                echo "codex-qwen: server did not become ready; see $log" >&2
+                exit 3
+            fi
+        done
+    fi
+    echo "Model server ready on port $port." >&2
+fi
+
+exec codex -p qwen "$@"

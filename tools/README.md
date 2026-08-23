@@ -9,6 +9,9 @@
 | `qwen38_chat.sh` | Run one prompt, start resident terminal chat, or launch the local Chatbox setup |
 | `qwen38_serve.py` | Expose the resident C/Metal runtime through an OpenAI-compatible HTTP API |
 | `qwen38_monitor.py` | Record CPU, GPU, process footprint and system memory on Apple Silicon |
+| `codex-qwen` | Run the OpenAI Codex CLI against the local runtime instead of a hosted model |
+
+`codex-qwen` starts the server if it is not already serving a large enough context, then execs `codex -p qwen`; it expects `~/.codex/qwen.config.toml`, and the target README documents both. Link it onto `PATH` with `ln -s "$PWD/tools/codex-qwen" ~/.local/bin/codex-qwen`.
 
 `support/qwen38_chatbox_config.py` is an implementation detail called by `qwen38_chat.sh`; it is separated because users do not invoke it directly.
 
