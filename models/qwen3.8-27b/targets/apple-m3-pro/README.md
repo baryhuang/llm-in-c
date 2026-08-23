@@ -168,9 +168,54 @@ seconds. Anything that resets the engine - a different system turn, a chat
 completions request, a context overflow - gives up the slot and the next
 session pays the cold prefill again.
 
-`QWEN38_CONTINUE_DEBUG=1` prints which checkpoint each request matched, and
+`QWEN38_CONTINUE_DEBUG=1` prints which checkpoint each request matched,
 `QWEN38_DUMP_PROMPT=<dir>` writes every rendered prompt and its declared prefix,
-which is how to check what actually varies between sessions.
+and every request logs a time-to-first-token breakdown over restore, prefill,
+forward and checkpoint save.
+
+### What the turn time is made of
+
+Profiling a four-turn edit task showed the checkpoint machinery costs nothing
+worth optimizing - restore 0.00-0.30 s, save 0.01-0.04 s - and the single
+forward that produces the first token is a flat 0.17 s. Everything else is
+prefill of the new suffix, and decode.
+
+Decode is the part that scales with the conversation, because every step
+attends over the whole KV cache. Measured on a fixed 200-token generation:
+
+| Context | Decode |
+|---|---|
+| 1,314 tokens | 9.9 tok/s |
+| 5,154 tokens | 9.3 tok/s |
+| 12,834 tokens | 6.5 tok/s |
+
+So prompt size is not only a one-off prefill cost; it is a tax on every token
+generated afterwards. The runtime's own speed knobs - `QWEN38_MTP_DEPTH`,
+`QWEN38_VERIFY_FAST`, `QWEN38_VERIFY_WIDE`, `QWEN38_DRAFT_VOCAB`,
+`QWEN38_PREFILL_MMA`, `QWEN38_PREFILL_MAX_CHUNK` - are already at the values
+[`results.json`](results.json) measured as best, so the prompt is where the
+remaining speed is.
+
+`QWEN38_STRIP_BLOCKS` drops named `<block>...</block>` spans from Codex's
+context messages before rendering. It defaults to `recommended_plugins`, a
+1,842-token list of plugins that are neither installed nor enabled in this
+profile: the model cannot act on it, so removing it cannot cost capability.
+The same task run before and after, with everything else fixed:
+
+| | 10,416-token prompt | 8,574-token prompt |
+|---|---|---|
+| Cold prefill | 235.1 s | 181.1 s |
+| Turn time to first token | 2.8 / 3.1 / 4.9 / 3.2 s | 2.5 / 3.4 / 4.5 / 3.0 s |
+| Decode | 12.1 / 10.4 / 14.2 / 12.7 tok/s | 12.4 / 10.0 / 15.3 / 13.7 tok/s |
+
+The model behaved identically across the two runs - same three `exec_command`
+calls, same 28/71/58/63 generated tokens, same 22/53/47/51 MTP accepts over
+6/22/12/14 steps - which is the evidence that the removed tokens were dead
+weight rather than context the model was using.
+
+Naming `skills_instructions` in `QWEN38_STRIP_BLOCKS` saves a further ~800
+tokens, but those skills exist on disk and the model could otherwise invoke
+them, so that one is a real trade and stays off by default.
 
 The profile exists to keep that first prefill survivable. A stock Codex turn
 sends about 60,000 tokens of tool schema alone (GitHub 76 KB, Gmail 33 KB and

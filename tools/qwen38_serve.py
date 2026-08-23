@@ -216,6 +216,30 @@ def tool_manifest(table):
     return manifest
 
 
+def strip_blocks(text):
+    """Drop configured <block>...</block> spans from a Codex message.
+
+    Codex sends context blocks the local model cannot act on. The
+    default one is <recommended_plugins>, an 1.8 k-token list of plugins
+    that are *not installed* and that this profile disables anyway;
+    every token of it is paid twice, once in prefill and again in the
+    attention of every decode step that follows. Removing it cannot cost
+    capability. QWEN38_STRIP_BLOCKS overrides the list - naming
+    skills_instructions there is a real trade, since those skills exist
+    and the model could otherwise invoke them."""
+    for name in STRIP_BLOCKS:
+        opening, closing = f"<{name}>", f"</{name}>"
+        while True:
+            start = text.find(opening)
+            if start < 0:
+                break
+            end = text.find(closing, start)
+            if end < 0:
+                break
+            text = text[:start] + text[end + len(closing):]
+    return text.strip()
+
+
 def content_text(content):
     """Text of a Responses content array (input_text/output_text/...)."""
     if isinstance(content, str):
@@ -289,7 +313,7 @@ def render_responses_template(request, table, thinking, effort):
         first = items[0]
         if isinstance(first, dict) and first.get("type", "message") == \
                 "message" and first.get("role") == "developer":
-            developer.append(content_text(first.get("content")).strip())
+            developer.append(strip_blocks(content_text(first.get("content"))))
             items.pop(0)
         else:
             break
@@ -361,6 +385,8 @@ def render_responses_template(request, table, thinking, effort):
             continue
         role = item.get("role", "user")
         text = content_text(item.get("content"))
+        if role != "assistant":
+            text = strip_blocks(text)
         if role == "assistant":
             parts.append("<|im_start|>assistant\n<think>\n\n</think>\n\n" +
                          text + "<|im_end|>\n")
@@ -534,6 +560,8 @@ RESPONSES_HONOR_EFFORT = os.environ.get(
 # Set to a directory to write each rendered prompt and its
 # declared prefix, for checking what varies between sessions.
 PROMPT_DUMP = os.environ.get("QWEN38_DUMP_PROMPT", "")
+STRIP_BLOCKS = [name for name in os.environ.get(
+    "QWEN38_STRIP_BLOCKS", "recommended_plugins").split(",") if name.strip()]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -825,6 +853,13 @@ class Handler(BaseHTTPRequestHandler):
                   f"tokens ({reused} reused), {first:.1f} s to first token, "
                   f"{generated} generated at {rate:.1f} tok/s, "
                   f"calls={calls or 'none'}", flush=True)
+            print(f"           ttft breakdown: restore "
+                  f"{stats.get('restore_s', 0.0):.2f} s, prefill "
+                  f"{stats.get('prefill_s', 0.0):.2f} s, forward "
+                  f"{stats.get('forward_s', 0.0):.2f} s, checkpoint save "
+                  f"{stats.get('save_s', 0.0):.2f} s; mtp "
+                  f"{stats.get('mtp_accepted', 0)} accepted over "
+                  f"{stats.get('mtp_steps', 0)} steps", flush=True)
             for index, item in enumerate(output):
                 self.sse_event("response.output_item.done",
                                {"output_index": index, "item": item})

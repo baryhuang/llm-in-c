@@ -581,6 +581,14 @@ int main(int argc, char **argv) {
             fflush(stdout);
         }
         double prompt_start = seconds_now();
+        /* Phase timers: with a warm checkpoint the visible cost of a
+         * turn is no longer the prefill, so the breakdown has to be
+         * measurable rather than guessed at. */
+        double stage_restore = 0.0;
+        double stage_prefill = 0.0;
+        double stage_forward = 0.0;
+        double stage_save = 0.0;
+        double stage_mark = prompt_start;
         uint32_t start_position = 0;
         if (continuation && history_count != 0 &&
             prompt_count > history_count &&
@@ -623,6 +631,8 @@ int main(int argc, char **argv) {
             history_count = 0;
             system_valid = 0;
         }
+        stage_restore = seconds_now() - stage_mark;
+        stage_mark = seconds_now();
         if (getenv("QWEN38_CONTINUE_DEBUG") != NULL)
             fprintf(stderr, "[continue] prefill from %u of %zu\n",
                     start_position, prompt_count);
@@ -645,6 +655,8 @@ int main(int argc, char **argv) {
                 failed = 1;
             }
             if (!failed && boundary != start_position) {
+                stage_prefill += seconds_now() - stage_mark;
+                stage_mark = seconds_now();
                 if (qwen38_m3_model_prefix_save_slot(
                         model, QWEN38_M3_PREFIX_SYSTEM, error,
                         sizeof(error)) == 0) {
@@ -655,6 +667,8 @@ int main(int argc, char **argv) {
                 } else {
                     system_valid = 0;
                 }
+                stage_save += seconds_now() - stage_mark;
+                stage_mark = seconds_now();
             }
             if (!failed && prefill_span(model, prompt_ids, boundary,
                                         prefill_end, error,
@@ -663,6 +677,8 @@ int main(int argc, char **argv) {
                 failed = 1;
             }
         }
+        stage_prefill += seconds_now() - stage_mark;
+        stage_mark = seconds_now();
         if (!failed && qwen38_m3_model_forward(
                 model, prompt_ids[prompt_count - 1],
                 (uint32_t)(prompt_count - 1), &result, &logits,
@@ -676,6 +692,8 @@ int main(int argc, char **argv) {
             system_valid = 0;
             continue;
         }
+        stage_forward = seconds_now() - stage_mark;
+        stage_mark = seconds_now();
         memcpy(history, prompt_ids,
                (size_t)prompt_count * sizeof(uint32_t));
         history_count = (uint32_t)prompt_count;
@@ -689,6 +707,7 @@ int main(int argc, char **argv) {
                 snapshot_count = 0;
             }
         }
+        stage_save += seconds_now() - stage_mark;
 
         qwen38_sampler sampler = {
             .temperature = request.temperature, .top_k = request.top_k,
@@ -831,14 +850,17 @@ int main(int argc, char **argv) {
                        "\"first_token_s\": %.3f, \"total_s\": %.3f, "
                        "\"stop\": \"%s\", \"mtp_steps\": %zu, "
                        "\"mtp_accepted\": %zu, \"mtp_depth\": %d, "
-                       "\"prefilled_from\": %u}\n",
+                       "\"prefilled_from\": %u, \"restore_s\": %.3f, "
+                       "\"prefill_s\": %.3f, \"forward_s\": %.3f, "
+                       "\"save_s\": %.3f}\n",
                        visible_count, prompt_count,
                        first_token_seconds >= 0.0 ?
                            first_token_seconds : 0.0,
                        total_seconds,
                        stopped ? "stop" : "length",
                        mtp_steps, mtp_accepts, mtp_depth,
-                       start_position);
+                       start_position, stage_restore, stage_prefill,
+                       stage_forward, stage_save);
             }
             fflush(stdout);
         } else {
