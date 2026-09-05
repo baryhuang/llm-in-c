@@ -188,4 +188,4 @@ Performance patches need a correctness gate and raw before/after measurements. A
 
 ## License
 
-No license has been selected yet.
+Licensed under the [MIT License](LICENSE). Copyright (c) 2026 Bury Huang.
